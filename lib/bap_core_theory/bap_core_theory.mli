@@ -138,11 +138,12 @@
     be bound to expressions. Sometimes variables are typed, sometimes
     they are just identifiers with not associated type.
 
-    In the Core Theory all variables are sorted, i.e., the have an
-    associated value sort. Variables are also having scope and
-    extent. Finally, variables could be mutable or immutable.
+    In the Core Theory all variables are sorted, i.e., they have an
+    associated value sort. Variables are also having scope (lexical
+    visibility), and extent (lifetime) Finally, variables could be
+    mutable or immutable.
 
-    A physical variable is a global mutable variable with infinite
+    A physical variable is a global mutable variable with the infinite
     scope and extent. They are used to refer predefined (micro)
     architectural locations of a modeled system, e.g., registers,
     memory banks, caches, register files, etc. Global variables has
@@ -778,6 +779,10 @@ module Theory : sig
           Since such structures are required to be monomorphic, the
           sort type index should be removed using the [forget] function,
           before a sort could be stored in it.
+
+          Note, that the type index is only removed from the meta
+          language (OCaml) type, but is preserved in the value term,
+          so it could be reconstructed (refined) later.
       *)
       module Top : sig
         type t = unit sort [@@deriving bin_io, compare, sexp]
@@ -1080,7 +1085,9 @@ module Theory : sig
   *)
   module Var : sig
     type 'a t
+
     type ident [@@deriving bin_io, compare, sexp]
+
     type ord
 
 
@@ -1161,7 +1168,21 @@ module Theory : sig
         @since 2.3.0  *)
     val pp : Format.formatter -> 'a t -> unit
 
-    (** Variable identifiers.  *)
+    (** Variable identifiers.
+
+        Identifiers are compared caseless, otherwise the order loosely
+        matches the lexicographical order of the textual
+        representation. Identifiers of virtual variables are ordered
+        before identifiers of physical variables and mutable virtual
+        variables are ordered before immutable. Identifiers of a
+        versioned variable are ordered in the ascending order of their
+        versions. And identifiers of virtual variables are ordered in
+        the ascending order of their numeric values, e.g., `#2`
+        is ordered before `#123`.
+
+        @before 2.4.0 the ordering was unspecified but wasn't caseless.
+        @since 2.4.0 the ordering is caseless
+    *)
     module Ident : sig
       type t = ident [@@deriving bin_io, compare, sexp]
       include Stringable.S with type t := t
@@ -1174,6 +1195,10 @@ module Theory : sig
 
         This module enables construction of complex data structures on
         variables, e.g., [Set.empty (module Theory.Var.Top)].
+
+        The variables are ordered by their identifiers so that two
+        variables with the same name but different sorts are compared
+        equal.
     *)
     module Top : sig
       type nonrec t = unit t [@@deriving bin_io, compare, sexp]
@@ -1782,6 +1807,16 @@ module Theory : sig
     val is_subroutine : (program, bool option) KB.slot
 
 
+    (** [fresh] a fresh label (a shortcut for [KB.create cls]).
+
+        @since 2.4.0   *)
+    val fresh : t knowledge
+
+    (** [null] is a shortcut for [KB.null cls].
+
+        @since 2.4.0  *)
+    val null : t
+
     (** [for_addr x] generates a link to address [x].
 
         It is guaranteed that every call [for_addr ~package x] with
@@ -2338,7 +2373,18 @@ module Theory : sig
     (** [seq x y] performs effect [x], after that perform effect [y].  *)
     val seq : 'a eff -> 'a eff -> 'a eff
 
-    (** [blk lbl data ctrl] a labeled sequence of effects. *)
+    (** [blk lbl data ctrl] an optionally labeled sequence of effects.
+
+        If [lbl] is [Label.null] then the block is unlabeled. If it is
+        not [Label.null] then the denotations will preserve the label
+        and assume that this [blk] is referenced from some other
+        blocks.
+
+        @since 2.4.0 the [blk] operator accepts (and welcomes)
+        [Label.null] as the label in cases when the block is not
+        really expected to be called from anywhere else.
+
+    *)
     val blk : label -> data eff -> ctrl eff -> unit eff
 
 

@@ -15,7 +15,7 @@ val is_empty : t -> bool
 val equal : t -> t -> bool
 val merge : t -> t -> t
 val add : t -> 'a item -> 'a Def.t -> t
-val get : t -> 'a item -> 'a Def.t list
+val get : ?name:string -> t -> 'a item -> 'a Def.t list
 val fold : t -> 'a item -> init:'s ->
   f:(package:string -> 'a Def.t -> 's -> 's) -> 's
 val context : t -> Context.t
@@ -28,7 +28,8 @@ val with_package : t -> string -> t
 val reset_package : t -> t
 val use_package : t -> ?target:string -> string -> t
 val in_package : string -> t -> (t -> 'a) -> 'a
-
+val packages : t -> (string * string) list
+val update_package_documentation : t -> string -> string -> t
 val is_applicable : t -> 'a Def.t -> bool
 
 module Items : sig

@@ -7,7 +7,7 @@ open Knowledge.Syntax
 
 module Value = Knowledge.Value
 
-let package = "core-theory"
+let package = "core"
 
 type const = Const [@@deriving bin_io, compare, sexp]
 type mut = Mut [@@deriving bin_io, compare, sexp]
@@ -19,9 +19,9 @@ let mut = Knowledge.Class.declare ~package "mut-var" Mut
     ~desc:"temporary mutable variables"
 
 type ident =
-  | Reg of {name : string; ver : int}
-  | Let of {num : Int63.t}
   | Var of {num : Int63.t; ver : int}
+  | Let of {num : Int63.t}
+  | Reg of {name : String.Caseless.t; ver : int}
 [@@deriving bin_io, compare, hash, sexp]
 
 type 'a var = 'a sort * ident

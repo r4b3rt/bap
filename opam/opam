@@ -13,11 +13,11 @@ depends: [
   "camlzip"
   "linenoise" {>= "1.1" & < "2.0"}
   "cmdliner" {>= "1.0" & < "2.0"}
-  "ppx_bap"  {= "master"}
+  "ppx_bap" {>= "v0.14" & < "v0.15"}
   "core_kernel" {>= "v0.14" & < "v0.15"}
   "ezjsonm"
   "fileutils"
-  "FrontC"
+  "FrontC" {>= "4.1" & < "4.2"}
   "oasis" {build & >= "0.4.10"}
   "ounit" {build}
   "ocamlgraph" {>= "1.8.6"}
@@ -32,11 +32,10 @@ depends: [
   "conf-bap-llvm" {>= "1.1"}
   "parsexp"
   "bap-signatures"
-  "result"
   "z3"
   "conf-radare2"
   "yojson"
-  "result" {= "1.4"}
+  "result"
 ]
 depopts: [
   "conf-ida"
@@ -53,6 +52,7 @@ build: [
     "--with-llvm-config=%{conf-bap-llvm:config}%" {conf-bap-llvm:installed}
     "--mandir=%{man}%"
     "--enable-everything"
+    "--disable-ghidra"
     "--enable-tests" {with-test}
     "--%{conf-ida:enable}%-ida"
     "--ida-path=%{conf-ida:path}%" {conf-ida:installed}
