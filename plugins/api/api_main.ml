@@ -1,11 +1,13 @@
-open Core_kernel
-open Result
+open Core_kernel[@@warning "-D"]
+open Result.Monad_infix
 open Bap.Std
+module Sys = Caml.Sys
 include Self()
 
 module Configuration = Bap_main.Extension.Configuration
+module Sites = Api_sites
 
-let try_with f = match try_with f with
+let try_with f = match Result.try_with f with
   | Ok r -> Ok r
   | Error exn -> Error (`Fail exn)
 
@@ -39,7 +41,7 @@ module Api_path = struct
   let to_string = Path.string_of_filename
 
   let expand_home path =
-    Option.(value_map ~default:path ~f:ident
+    Option.(value_map ~default:path ~f:Fn.id
               (String.chop_prefix ~prefix:"~" (to_string path) >>= fun p ->
                getenv "HOME" >>= fun h ->
                Some Path.(filename_of_string h / filename_of_string p)))
@@ -116,7 +118,7 @@ module Api = struct
       Some {desc = {lang; name}; path;}
     else None
 
-  let ok_if_true2 f x ~error = f x >>= fun r -> ok_if_true r ~error
+  let ok_if_true2 f x ~error = f x >>= fun r -> Result.ok_if_true r ~error
 
   let cp api dest =
     ok_if_true2 Api_path.exists dest ~error:`No_dst >>= fun () ->
@@ -234,6 +236,7 @@ let paths = List.map ~f:Api_path.of_string
 
 let all_paths o = List.rev@@List.concat [
     paths@@Api_options.api_paths o;
+    paths Sites.paths;
     env_paths;
     paths@@Configuration.[
         Filename.concat datadir "api";
@@ -286,17 +289,6 @@ let show_all_apis paths =
              List.sort ~compare:(fun x y -> String.compare x.desc.lang y.desc.lang) in
   List.iter ~f:print_lang (List.group ~break:(fun x y -> String.(x.desc.lang <> y.desc.lang)) apis);
   printf "Total number of available API: %d\n" (List.length apis)
-
-let sanity_check paths =
-  let is_same api api' =
-    equal_api_descr api.desc api'.desc &&
-    Path.compare api.path api'.path <> 0 in
-  let check_for_pair api apis =
-    match List.find ~f:(is_same api) apis with
-    | None -> ()
-    | Some api' -> Api_error.sanity_fail api api'  in
-  let all = api_of_paths paths in
-  List.iter ~f:(fun api -> check_for_pair api all) all
 
 module Cmdline = struct
   let man = [
@@ -388,7 +380,6 @@ module Cmdline = struct
   let dispatch o =
     let open Api_options in
     let paths = all_paths o in
-    sanity_check paths;
     dispatch_api_ops o;
     dispatch_flags o;
     Project.register_pass ~autorun:true ~deps:["abi"] (main paths)
@@ -401,9 +392,11 @@ module Cmdline = struct
 
   let () =
     Config.manpage man;
-    Config.when_ready (fun {Config.get=(!)} ->
-        let paths = normalize_paths !path in
-        let o = create !add_api !remove_api
-            !list_paths !show_apis paths in
-        dispatch o)
+    Config.declare_extension ~doc:"inserts subroutines arg terms"
+      ~provides:["abi"; "api"; "pass"] @@
+    fun {Config.get=(!)} ->
+    let paths = normalize_paths !path in
+    let o = create !add_api !remove_api
+        !list_paths !show_apis paths in
+    dispatch o
 end

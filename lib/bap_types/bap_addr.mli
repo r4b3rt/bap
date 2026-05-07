@@ -8,8 +8,8 @@
     representation of an address.
 *)
 
-open Core_kernel
-open Bap_common
+open Core_kernel[@@warning "-D"]
+open Bap_common_types
 val memref : ?disp:int -> ?index:int -> ?scale:size -> addr -> addr
 
 (** Address arithmetic  *)

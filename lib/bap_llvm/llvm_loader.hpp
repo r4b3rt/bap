@@ -27,6 +27,7 @@ static std::string scheme =
     "(declare llvm:elf-program-header (name str) (off int) (size int))\n"
     "(declare llvm:name-reference (at int) (name str))\n"
     "(declare llvm:relocation (at int) (addr int))\n"
+    "(declare llvm:relative-relocation (at int))\n"
     "(declare llvm:section-entry (name str) (addr int) (size int) (off int))\n"
     "(declare llvm:section-flags (name str) (r bool) (w bool) (x bool))\n"
     "(declare llvm:segment-command-flags (name str) (r bool) (w bool) (x bool))\n"
@@ -98,6 +99,18 @@ void verbose_fails(const error_or<T> &loaded) {
     }
 }
 
+int addr_size(const Triple &target, const object::ObjectFile *obj) {
+    if (target.isArch64Bit()) {
+        return 64;
+    } else if (target.isArch32Bit()) {
+        return 32;
+    } else if (target.isArch16Bit()) {
+        return 16;
+    } else {
+        return obj->getBytesInAddress() * 8;
+    }
+}
+
 void emit_common_header(ogre_doc &s, const object::ObjectFile *obj) {
     s.raw_entry(scheme);
     auto target = obj->makeTriple();
@@ -106,7 +119,7 @@ void emit_common_header(ogre_doc &s, const object::ObjectFile *obj) {
     s.entry("vendor") << target.getVendorName();
     s.entry("system") << target.getOSName();
     s.entry("abi") << prim::string_of_abi(target.getEnvironment());
-    s.entry("bits") << (obj->getBytesInAddress() * 8);
+    s.entry("bits") << addr_size(target, obj);
     s.entry("is-little-endian") << target.isLittleEndian();
 }
 

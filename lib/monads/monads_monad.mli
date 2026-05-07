@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 
 module Types = Monads_types
 module Monoid = Monads_monoid
@@ -311,6 +311,8 @@ module State : sig
     type id
     module Id : sig
       include Identifiable.S with type t = id
+      val zero : t
+      val succ : t -> t
       val pp : Caml.Format.formatter -> id -> unit
     end
 

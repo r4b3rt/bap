@@ -1,7 +1,9 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_plugins.Std
 
 open OUnit2
+
+module Sys = Caml.Sys
 
 let suite () =
   "BAP" >::: [
@@ -27,7 +29,7 @@ let load_plugins () =
                        Error.to_string_hum e))
 
 let run_unit_tests () =
-  match Bap_main.init ~requires:["lifter"; "disassembler"; "semantics";] () with
+  match Bap_main.init () with
   | Error err ->
     Format.eprintf "Failed to initialize BAP: %a@\n%!"
       Bap_main.Extension.Error.pp err;

@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Regular.Std
 open Bap_types.Std
@@ -446,7 +446,6 @@ include Printable.Make(struct
 
 let hexdump t = Format.asprintf "%a" pp_hex t
 
-
 let domain = KB.Domain.optional "mem"
     ~equal:(fun x y ->
         Addr.equal x.addr y.addr &&
@@ -457,16 +456,3 @@ let slot = KB.Class.property ~package:"bap"
     Theory.Program.cls "mem" domain
     ~public:true
     ~desc:"a memory region occupied by the program"
-
-let () =
-  let open KB.Syntax in
-  KB.promise Theory.Label.addr @@ fun label ->
-  KB.collect slot label >>|? fun mem ->
-  Some (Addr.to_bitvec (min_addr mem))
-
-let () =
-  let open KB.Rule in
-  declare ~package:"bap" "addr-of-mem" |>
-  require slot |>
-  provide Theory.Label.addr |>
-  comment "addr of the first byte"

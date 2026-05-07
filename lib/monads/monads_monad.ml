@@ -1,4 +1,6 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
+
+let ident = Fn.id
 
 module Monoid = Monads_monoid
 module Types = Monads_types
@@ -110,6 +112,7 @@ module Monad = struct
       let expect ?(finally=Fn.nothing) ~f ~catch =
         let invoke f x = f x >>= fun x -> finally () >>= fun () -> return x in
         try invoke f () with exn -> invoke catch exn
+      [@@warning "-16"]
     end
 
 
@@ -1004,7 +1007,7 @@ module State = struct
     s : 'b;
   }
 
-  type ('a,'e) state = State of ('e -> 'a) [@@unboxed]
+  type ('a,'e) state = State of ('e -> 'a)
 
 
   module Tp(T : T1)(M : Monad.S) = struct

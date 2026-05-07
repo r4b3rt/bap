@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Graphlib_intf
 open Graphlib_regular_intf
@@ -38,8 +38,8 @@ module Make(Node : Opaque.S)(Label : T) = struct
     type label = Node.t
     type nonrec graph = graph
 
-    let create = ident
-    let label = ident
+    let create = Fn.id
+    let label = Fn.id
     let mem n g = Map.mem g n
     let adj dir n g  = Map.find g n |> function
       | None -> Seq.empty
@@ -82,12 +82,11 @@ module Make(Node : Opaque.S)(Label : T) = struct
     let remove_arrows = update_arrows remove_arrow
 
     let update n l g : graph = Map.find g n |> function
-      | None -> g
-      | Some {inc;out} ->
-        let n = (create l) in
-        Map.set g ~key:n ~data:{inc;out}  |>
-        insert_arrows Fields_of_node_info.out inc n |>
-        insert_arrows Fields_of_node_info.inc out n
+      | Some {inc;out} when Node.equal n l ->
+        Map.set g ~key:l ~data:{inc;out}  |>
+        insert_arrows Fields_of_node_info.out inc l |>
+        insert_arrows Fields_of_node_info.inc out l
+      | _ -> g
 
     let remove n g = match Map.find g n with
       | None -> g

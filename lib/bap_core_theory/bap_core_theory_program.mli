@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_knowledge
 
 module Value  = Bap_core_theory_value
@@ -19,6 +19,7 @@ module Semantics : sig
   val cls : (cls, unit Effect.sort) Knowledge.cls
   val slot : (program, t) Knowledge.slot
   val value : (cls, unit Value.t) Knowledge.slot
+  val code : (cls, string option) Knowledge.slot
   include Knowledge.Value.S with type t := t
 end
 
@@ -34,7 +35,14 @@ module Source : sig
   val file : (cls,string option) slot
 end
 
-module Language : Knowledge.Enum.S with type t = language
+module Language : sig
+  include Knowledge.Enum.S with type t = language
+  val c : language
+  val cxx : language
+  val ada : language
+  val fortran : language
+  val pascal : language
+end
 
 module Unit : sig
   open Knowledge
@@ -68,6 +76,7 @@ module Compiler : sig
     ?version:string list ->
     ?options:string list ->
     string -> compiler
+  val name : compiler -> string
   val version : compiler -> string list
   val options : compiler -> string list
   val specs : compiler -> string Map.M(String).t
@@ -86,6 +95,8 @@ module Label : sig
   val possible_name : (program, string option opinions) slot
   val is_valid : (program, bool option) slot
   val is_subroutine : (program, bool option) slot
+  val fresh : t knowledge
+  val null : t
   val for_addr : ?package:string -> Bitvec.t -> t knowledge
   val for_name : ?package:string -> string -> t knowledge
   val for_ivec : ?package:string -> int -> t knowledge

@@ -24,7 +24,7 @@
     subset of the language which is relevant to their tasks without
     getting bogged down by the irrelevant architectural details.
 
-    The language can express the semantics of the floating point
+    The language can express the semantics of the floating-point
     operations including operations, but not limiting to, specified in
     the IEEE754 standard.
 
@@ -61,7 +61,7 @@
 
     The Core language subsumes all other sub-languages and includes
     modular arithmetic and other operations on bitvectos, operations
-    with memories, registers, floating points including
+    with memories, registers, floating-points including
     transcendental functions.
 
     The reason to have so many languages is purely pragmatic: to
@@ -138,11 +138,12 @@
     be bound to expressions. Sometimes variables are typed, sometimes
     they are just identifiers with not associated type.
 
-    In the Core Theory all variables are sorted, i.e., the have an
-    associated value sort. Variables are also having scope and
-    extent. Finally, variables could be mutable or immutable.
+    In the Core Theory all variables are sorted, i.e., they have an
+    associated value sort. Variables are also having scope (lexical
+    visibility), and extent (lifetime) Finally, variables could be
+    mutable or immutable.
 
-    A physical variable is a global mutable variable with infinite
+    A physical variable is a global mutable variable with the infinite
     scope and extent. They are used to refer predefined (micro)
     architectural locations of a modeled system, e.g., registers,
     memory banks, caches, register files, etc. Global variables has
@@ -265,8 +266,8 @@
 
     {[
       let () =
-        Theory.declare "my-constant-tracker"
-          Theory.instance ~require:["bap.std:constant-tracker"] >>=
+        Theory.declare "my-constant-tracker" @@
+        Theory.instance ~require:["bap.std:constant-tracker"] >>=
         Theory.require >>|
         fun (module Base) : Theory.core -> (module struct
           include Base
@@ -362,7 +363,7 @@
     designed for such use-cases.
 *)
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Caml.Format
 open Bap_knowledge
 
@@ -393,7 +394,7 @@ module Theory : sig
       to a value, aka expressions. Values are sorted and value sorts
       hold static information about the value representation, like the
       number of bits in a bitvector or the representation format in a
-      floating point value.
+      floating-point value.
 
       All values belong to the same Knowledge class and thus share the
       same set of properties, with each property being a specific
@@ -561,7 +562,7 @@ module Theory : sig
         A concrete and extensible representation of a value sort. The
         sort usually holds the static information about the value
         representation, like the width of a bitvector, the
-        representation format of a floating point number, and so on.
+        representation format of a floating-point number, and so on.
 
         This module is mostly needed when a new sort is defined. The
         Core Theory provides a predefined collection of sorts, here is
@@ -569,7 +570,7 @@ module Theory : sig
 
         - {!Bitv} - bitvectors, e.g., [BitVec(i)]
         - {!Mem} - memories, e.g., [Mem(BitVec(i), BitVec(j)]
-        - {!Float} - floating points, e.g., [Float(IEEE754(2, 8, 23), BitVec(32)];
+        - {!Float} - floating-points, e.g., [Float(IEEE754(2, 8, 23), BitVec(32)];
         - {!Rmode} - rounding mode, e.g., [Rmode].
 
         This module defines a simple DSL for specifying sorts, the DSL
@@ -778,6 +779,10 @@ module Theory : sig
           Since such structures are required to be monomorphic, the
           sort type index should be removed using the [forget] function,
           before a sort could be stored in it.
+
+          Note, that the type index is only removed from the meta
+          language (OCaml) type, but is preserved in the value term,
+          so it could be reconstructed (refined) later.
       *)
       module Top : sig
         type t = unit sort [@@deriving bin_io, compare, sexp]
@@ -1007,11 +1012,11 @@ module Theory : sig
   end
 
 
-  (** Sorts for floating point numbers.  *)
+  (** Sorts for floating-point numbers.  *)
   module Float : sig
 
 
-    (** Sort describing the representation format of a floating point number.  *)
+    (** Sort describing the representation format of a floating-point number.  *)
     module Format : sig
       type ('r,'s) t
 
@@ -1021,12 +1026,12 @@ module Theory : sig
 
 
       (** [bits s] returns the sort of bitvectors that are used by
-          floating point numbers of sort [s].  *)
+          floating-point numbers of sort [s].  *)
       val bits : ('r,'s) t Value.sort -> 's Bitv.t Value.sort
 
 
       (** [exp s] returns an expression that describes the
-          interpretation of the bits of the floating point numbers
+          interpretation of the bits of the floating-point numbers
           represented by the sort [s].  *)
       val exp : ('r,'s) t Value.sort -> 'r Value.sort
     end
@@ -1035,22 +1040,22 @@ module Theory : sig
     type 'f t
 
 
-    (** [define r s] defines a floating point sort, indexed by the
-        floating point format [r] that gives the interpretation to
+    (** [define r s] defines a floating-point sort, indexed by the
+        floating-point format [r] that gives the interpretation to
         the bits of bitvectors of sort [s]. *)
     val define : ('r,'s) format Value.sort -> ('r,'s) format t Value.sort
 
 
-    (** [refine s] if [s] is a floating point sort then restores its type.  *)
+    (** [refine s] if [s] is a floating-point sort then restores its type.  *)
     val refine : unit Value.sort -> ('r,'s) format t Value.sort option
 
 
-    (** [format s] returns the format of floating points of sort [s].   *)
+    (** [format s] returns the format of floating-points of sort [s].   *)
     val format : ('r,'s) format t Value.sort -> ('r,'s) format Value.sort
 
 
     (** [bits s] returns the sort of bitvectors that are used to
-        represent floating point numbers of sort [s].   *)
+        represent floating-point numbers of sort [s].   *)
     val bits : ('r,'s) format t Value.sort -> 's Bitv.t Value.sort
   end
 
@@ -1080,7 +1085,9 @@ module Theory : sig
   *)
   module Var : sig
     type 'a t
+
     type ident [@@deriving bin_io, compare, sexp]
+
     type ord
 
 
@@ -1161,7 +1168,21 @@ module Theory : sig
         @since 2.3.0  *)
     val pp : Format.formatter -> 'a t -> unit
 
-    (** Variable identifiers.  *)
+    (** Variable identifiers.
+
+        Identifiers are compared caseless, otherwise the order loosely
+        matches the lexicographical order of the textual
+        representation. Identifiers of virtual variables are ordered
+        before identifiers of physical variables and mutable virtual
+        variables are ordered before immutable. Identifiers of a
+        versioned variable are ordered in the ascending order of their
+        versions. And identifiers of virtual variables are ordered in
+        the ascending order of their numeric values, e.g., `#2`
+        is ordered before `#123`.
+
+        @before 2.4.0 the ordering was unspecified but wasn't caseless.
+        @since 2.4.0 the ordering is caseless
+    *)
     module Ident : sig
       type t = ident [@@deriving bin_io, compare, sexp]
       include Stringable.S with type t := t
@@ -1174,6 +1195,10 @@ module Theory : sig
 
         This module enables construction of complex data structures on
         variables, e.g., [Set.empty (module Theory.Var.Top)].
+
+        The variables are ordered by their identifiers so that two
+        variables with the same name but different sorts are compared
+        equal.
     *)
     module Top : sig
       type nonrec t = unit t [@@deriving bin_io, compare, sexp]
@@ -1234,6 +1259,24 @@ module Theory : sig
   *)
   type role
 
+
+  (** a description of the register aliasing.
+
+      See {!Alias}.
+
+      @since 2.4.0
+  *)
+  type alias
+
+
+  (** a description of the origin of an aliased register.
+
+      See {!Origin}.
+
+      @since 2.4.0
+  *)
+  type ('a,'k) origin
+
   (** The semantics of programs.
 
       The semantics of a program is denoted with effects that this
@@ -1253,7 +1296,15 @@ module Theory : sig
     (** the slot to store program semantics.  *)
     val slot : (program, t) Knowledge.slot
 
+    (** the value of the effect.
+
+        Represents the value of side-effectful compuations.
+
+        @since 2.3.0 *)
     val value : (cls, unit Value.t) Knowledge.slot
+
+    (** the memory contents of the program. *)
+    val code : (cls, string option) Knowledge.slot
 
     include Knowledge.Value.S with type t := t
   end
@@ -1332,7 +1383,7 @@ module Theory : sig
         This type is a unique identifier of the target,
         represented as [KB.Name.t] underneath the hood.
     *)
-    type t = target
+    type t = target [@@deriving bin_io, compare, sexp]
     include Base.Comparable.S with type t := t
     include Binable.S with type t := t
     include Stringable.S with type t := t
@@ -1355,7 +1406,15 @@ module Theory : sig
         For the description of parameters see the corresponding
         accessor functions in this module.
 
-        @since 2.3.0 has the regs optional parameter.
+        If the target architecture has register aliases, i.e.,
+        registers that correspond to some parts of other registers,
+        then they should be properly described with the [aliasing]
+        parameter, using the {!Alias} language, in which each register
+        that has aliases is structurally defined in terms of its
+        subparts.
+
+        @since 2.3.0 has the [regs] optional parameter.
+        @since 2.4.0 has the [aliasing] optional parameters.
     *)
     val declare :
       ?parent:t ->               (** defaults to [unknown] *)
@@ -1367,6 +1426,7 @@ module Theory : sig
       ?code_alignment:int ->     (** defaults to 8 bit *)
       ?vars:unit Var.t list ->   (** defaults to [[]] *)
       ?regs:(role list * unit Var.t list) list -> (** defaults to [[]] *)
+      ?aliasing:alias list ->
       ?endianness:endianness ->  (** defaults to [Endian.big] *)
       ?system:system ->          (** defaults to [System.unknown]  *)
       ?abi:abi ->                (** defaults to [Abi.unknown] *)
@@ -1377,6 +1437,37 @@ module Theory : sig
       ?package:string ->         (** defaults to ["user"] *)
       string -> t
 
+
+
+    (** [register <variants> t] generates and registers a list of targets.
+
+        For a list of possible target properties generate a set of
+        unique targets and declare them. To generate a unique name the
+        following scheme is used,
+
+        {v<name>-<system>-<abi><fabi>-<format>+<option>...v}
+
+        where if a property is [:unknown] then it is not listed in
+        the name (including the separator, if necessary).
+
+        E.g.,
+        {v
+        arm-linux-gnueabihf-elf
+        armv7-linux-gnueabihf+m3
+        v}
+
+        @since 2.5.0
+    *)
+
+    val register :
+      ?systems:system list ->
+      ?abis:abi list ->
+      ?fabis:fabi list ->
+      ?filetypes:filetype list ->
+      ?options:options list ->
+      ?package:string ->
+      t -> unit
+
     (** [lookup ?package name] lookups a target with the given [name].
 
         If [name] is unqualified then it is qualified with the
@@ -1386,6 +1477,77 @@ module Theory : sig
         Returns [None] if the target with the given name wasn't declared.
     *)
     val lookup : ?package:string -> string -> t option
+
+
+    (** [select <reqs> ()] selects a target that matches requirements.
+
+        Selects the least specific target that belongs to [parent] and
+        matches the specified requirements. If [unique] is [true] and
+        there is no single match then raises an exception, otherwise
+        returns the first in the family order match (i.e., the least
+        specific of the matches).
+
+        If there are no matching targets returns [parent] if [strict]
+        is [false], otherwise fails with an exception.
+
+        The matching procedure uses the [domain] structure of the
+        corresponding parameters. A target matches the constraint if
+        all properties of the target matches the corresponding
+        parameters. A property matches a parameter if the property is
+        greater or equal (in the domain order) than the parameter.
+
+        See also {!filter}.
+
+        @param parent defaults to [unknown]
+        @param unique defaults to [false]
+        @param strict defaults to [false]
+        @param system defaults to [System.unknown]
+        @param abi defaults to [Abi.unknown]
+        @param fabi defaults to [Fabi.unknown]
+        @param options defaults to [Options.empty]
+
+        @since 2.5.0 *)
+    val select :
+      ?unique:bool ->
+      ?strict:bool ->
+      ?parent:t ->
+      ?system:system ->
+      ?abi:abi ->
+      ?fabi:fabi ->
+      ?filetype:filetype ->
+      ?options:options -> unit -> t
+
+
+    (** [filter <reqs> ()] selects targets that matches requirements.
+
+        Filters targets that belong to [parent] and match the
+        specified requirements. The targets are returned in the family
+        order, i.e., the least specific target is comming first. This
+        is the same order in which [family] list targets.
+
+        The matching procedure uses the [domain] structure of the
+        corresponding parameters. A target matches the constraint if
+        all properties of the target matches the corresponding
+        parameters. A property matches a parameter if the property is
+        greater or equal (in the domain order) than the parameter.
+
+        See also {!select}.
+
+        @param parent defaults to [unknown]
+        @param system defaults to [System.unknown]
+        @param abi defaults to [Abi.unknown]
+        @param fabi defaults to [Fabi.unknown]
+        @param options defaults to [Options.empty]
+
+        @since 2.5.0 *)
+    val filter :
+      ?strict:bool ->
+      ?parent:t ->
+      ?system:system ->
+      ?abi:abi ->
+      ?fabi:fabi ->
+      ?filetype:filetype ->
+      ?options:options -> unit -> t list
 
     (** [get ?package name] returns the target with the given [name].
 
@@ -1398,7 +1560,7 @@ module Theory : sig
 
     (** [read ?package name] is a synonym for [get ?package name].
 
-        Introduces for the consistency with the [Enum.S] interface.
+        Introduced for the consistency with the [Enum.S] interface.
     *)
     val read : ?package:string -> string -> t
 
@@ -1420,10 +1582,38 @@ module Theory : sig
     (** [name target] is the unique name of the target.  *)
     val name : t -> KB.Name.t
 
-    (** [matches target name] is true if [name] matches either
-        the unqualified name of the target itsef or one of its
-        ancestors; or if the name matches one of the target
-        nicknames. E.g., [matches target "mips"].
+
+    (** [nicknames t] is the set of the target nicknames.
+
+        Note that the set is using caseless comparison.
+
+        @since 2.5.0 *)
+    val nicknames : t -> String.Caseless.Set.t
+
+
+    (** [matching t name] the target that matches [name].
+
+        [matching t name] is [Some r] where [r] is [t] or the closest
+        ancestor of [t] such that [r]'s name is equal to [name] or one
+        of name is [r]'s nicknames.
+
+        @since 2.5.0
+    *)
+    val matching : t -> string -> t option
+
+
+    (** [matches t name] when {!matching t name} is not [None].
+
+        [matching t name] is true when [name] matches either the
+        unqualified name of the target itsef or one of its ancestors;
+        or if the name matches one of the target nicknames or the
+        target parents nicknames.
+
+        E.g., [matches target "mips"].
+
+        @before 2.5.0 the nicknames of the ancestors weren't taken
+        into account
+        @after 2.5.0 uses the ancestors nicknames for matching
     *)
     val matches : t -> string -> bool
 
@@ -1455,7 +1645,7 @@ module Theory : sig
     *)
     val parents : t -> t list
 
-    (** [family p] returns an ordered list of targets that {!belongs} [p].
+    (** [family p] an ordered list of targets s.t. each {!belongs} to [p].
 
         The family members are ordered according to their hierarchy
         with [p] comming first.
@@ -1580,6 +1770,17 @@ module Theory : sig
         @since 2.3.0 *)
     val has_roles : t -> role list -> 'a Var.t -> bool
 
+
+    (** [unalias v] if [v] is an alias then returns its origin.
+
+        If [v] is defined in terms of other registers then the
+        returned value denotes [v] in terms of the original
+        register or registers. See {!Origin}.
+
+        @since 2.4.0
+    *)
+    val unalias : t -> 'a Var.t -> ('b,unit) origin option
+
     (** [endianness target] describes the byte order.
 
         Describes how multibyte words are stored in the main memory. *)
@@ -1607,6 +1808,12 @@ module Theory : sig
 
     (** the persistence type class, derived from [KB.Name.persistent] *)
     val persistent : t KB.persistent
+
+
+    (** [hash t] returns the target's hash.
+
+        @since 2.5.0 *)
+    val hash : t -> int
 
     (** An extensible set of the target options.
 
@@ -1730,7 +1937,6 @@ module Theory : sig
     (** the address of the label.  *)
     val addr : (program, Bitvec.t option) KB.slot
 
-
     (** the linkage name of the label  *)
     val name : (program, string option) KB.slot
 
@@ -1781,6 +1987,16 @@ module Theory : sig
     (** a link is subroutine if it is an entry point to a subroutine.  *)
     val is_subroutine : (program, bool option) KB.slot
 
+
+    (** [fresh] a fresh label (a shortcut for [KB.create cls]).
+
+        @since 2.4.0   *)
+    val fresh : t knowledge
+
+    (** [null] is a shortcut for [KB.null cls].
+
+        @since 2.4.0  *)
+    val null : t
 
     (** [for_addr x] generates a link to address [x].
 
@@ -1842,7 +2058,205 @@ module Theory : sig
 
   module Enum = KB.Enum [@@deprecated "[since 2021-02] use KB.Enum instead"]
 
+  (** A simple DSL for describing registers aliasing rules.
 
+      CPU architectures commonly give names to registers parts or,
+      contrary, give names to a concatenation of registers. For
+      example, in x86 it is possible to address the second byte of the
+      [RAX] register using the [AH] register. Or, in AVR, the [Y]
+      register is refers to the concatenation of [R19] and [R18]
+      registers.
+
+      Such kind of relationships between the CPU registers could be
+      described using a system of equations of the form,
+
+      {v
+         Rn = Ri * ... * Rj
+         ...
+         Rm = Rj * ... * Rk
+      v}
+
+      In this system, the same register can occur on the left and right-hand
+      sides multiple times. The system is solved for the set of basis
+      registers, [b1;...;bN] so that each register that occurs in the
+      system but which is not a basis register can be expressed in
+      terms of the basis registers.
+
+      For example, given the following system,
+
+      {[
+        def r25r24 [reg 25; reg r24];
+        def w [reg r25r24];
+        def w [reg whi; reg wlo];
+      ]}
+
+      And assuming that [r25] and [r24] are basis registers, it will
+      be inferred that the [r25r24] and [w] are both concatenations of
+      [r25] and [r24] and that [whi] and [wlo] are synonyms for [r25]
+      and [r24], correspondingly. This information is available via
+      the {!Target.unalias} function that will express an alias
+      register in terms of corresponding basis registers, see
+      {!Origin} for more information.
+
+      The set of basis registers is defined from the register roles
+      using a simple rule that all registers that are not [alias] are
+      basis registers, therefore it is necessary to mark alias
+      registers as such, otherwise the system of equations will not
+      have a solution.
+
+      In a well-formed system of equations each alias is uniquely
+      defined in terms of a basis register.
+
+      @since 2.4.0
+  *)
+  module Alias : sig
+    type t = alias
+    type 'a part
+
+
+    (** [def x parts] defines [x] as a concatenation of [parts].
+
+        All elements of [parts] must have the same size [n] and
+        the size of [x] should be equal to [n * List.length parts]. If
+        this doesn't hold then the aliasing definition will fail.
+
+        The left-most position of the list of [parts] correspond to
+        the most-significant parts (the high part) of the base
+        register [x].
+
+        Example,
+
+        {[
+          [
+            def rax [unk; reg eax];
+            def eax [unk; reg ax];
+            def ax [reg ah; reg al]
+          ]
+        ]}
+    *)
+    val def : 'a Bitv.t Var.t -> 'b part list -> t
+
+
+    (** [reg x] defines [x] as a part.   *)
+    val reg : 'a Bitv.t Var.t -> 'a part
+
+    (** [bit x] defines a boolean register [x] as a part.
+        @since 2.5.0 *)
+    val bit : Bool.t Var.t -> Bool.t part
+
+    (** [unk] defines an unnamed part of the register.   *)
+    val unk : 'a part
+  end
+
+
+  (** The description of the origin of an aliased register.
+
+      When a register is defined in terms of other registers,
+      [Origin.t] describes the relationship between an aliased
+      register and its origin register or registers.
+
+      The [('s,'k) Origin.t] data type is parameterized with two type
+      variables. The ['s] type variable denotes the width of the
+      origin register(s) and ['k] denotes the kind of relationship
+      between the alias and its origin.
+
+      Currently, we recognize three kinds of relationships. The [sub]
+      kind defines the alias as a subset of the origin register, i.e.,
+      a contiguous sequnce of bits that are fully enclosed in the
+      origin register. The [sup] kind defines an alias as a superset
+      of a number of origin registers, i.e., it is a contiguous
+      sequence of bits formed as a concatenation of the origin
+      registers. Finally, the [set] register defines an alias as
+      superset of a numbero of origin register, where each origin
+      register is a boolean flag, i.e., an alias is a contiguous
+      sequence of one-bit flags.
+
+      More kinds of relationships could be added later.
+
+      {3 Example of a subset relation}
+
+      Example, given the aliasing definition,
+      {[
+        [
+          def rax [unk; reg eax];
+          def eax [unk; reg ax];
+          def ax [ah; al];
+        ]
+      ]}
+
+      the [unalias ah] will retun the [origin] of [sub]-kind,
+      so that [reg origin] is [rax], [hi origin] is [15] and
+      [lo origin] is [8].
+      @since 2.4.0
+  *)
+  module Origin : sig
+
+    (** the abstract representation of an aliased register origin.  *)
+    type ('s,'k) t = ('s,'k) origin
+
+    (** the type index of the sub-registers *)
+    type sub
+
+    (** the type index for the super-registers  *)
+    type sup
+
+    (** the type index for a set of bits registers *)
+    type set
+
+    (** [cast_sub origin] recovers the kind of the origin.  *)
+    val cast_sub : ('a,unit) t -> ('a,sub) t option
+
+    (** [cast_sup origin] recovers the kind of the origin.  *)
+    val cast_sup : ('a,unit) t -> ('a,sup) t option
+
+    (** [cast_set origin] recovers the kind of the origin.  *)
+    val cast_set : ('a,unit) t -> (Bool.t,set) t option
+
+    (** [reg origin] is the base register.
+
+        The returned value is never an alias itself, i.e., it is a
+        base register. *)
+    val reg : ('a,sub) t -> 'a Bitv.t Var.t
+
+
+    (** [is_alias origin] if the the base register has the same size
+        and sort as the aliased register.  *)
+    val is_alias : ('a,sub) t -> bool
+
+
+    (** [hi origin] the inclusive upper bound.
+        When an alias is a subset of the [origin] register,
+        [hi origin] is the most significant bit of the alias
+        register. *)
+    val hi : ('a,sub) t -> int
+
+    (** [lo origin] returns the inclusive lower bound of the origin register
+        to which an alias belongs. *)
+    val lo : ('a,sub) t -> int
+
+
+    (** [regs origin] returns an ordered list of constituent registers.
+
+        The registers are sorted in the big endian order, i.e., the
+        first element of the list corresponds to the most significant
+        part of the base register. This is the same order, in which
+        the aliasing was specified, e.g., if the aliasing was defined
+        as, [def x [reg hix; reg lox]], then [regs] will
+        return [hix; lox].*)
+    val regs : ('a,sup) t -> 'a Bitv.t Var.t list
+
+
+    (** [bits origin] an list of flags that comprise the register.
+        The bits are sorted in the big endian order, i.e., the first
+        element of the list is the most significant part of the
+        alias. This is the same order, in which the aliasing was
+        specified, e.g., if the aliasing was defined as,
+        [def status [bit cf; bit zf]], then [regs] will return [cf; zf].
+
+        @since 2.5.0 *)
+    val bits : (Bool.t,set) t -> Bool.t Var.t list
+
+  end
 
   (** A target-specific role of program entities.
 
@@ -1890,21 +2304,31 @@ module Theory : sig
       *)
       val special : t
 
-
-
       (** the pseudo-register.
 
-          The pseudo-registers do not correspond to a real physical or
-          logical register in the instruction set but rather an alias
-          or a hard-wired register, such as constant zero or an
-          instruction register or a program counter.
+          The pseudo-registers do not correspond to an actual storage
+          but rather a hard-wired register, such as constant zero, or an
+          instruction register, or a program counter.
       *)
       val pseudo : t
+
+
+      (** the alias register.
+
+          The register is not real register but is defined in terms of
+          other registers, e.g., as a subset of other register or a
+          concatenation of other registers, or somehow else.
+
+          See {!Alias} and {!Origin}.
+
+          @since 2.4.0
+      *)
+      val alias : t
 
       (** the register is used by the integer arithmetic unit
 
           This role can be assigned both to general and special
-          purpose registers. E.g., to get integer arithemtic status
+          purpose registers. E.g., to get integer arithmetic status
           control registers use [[special; integer]].  *)
       val integer : t
 
@@ -1946,9 +2370,19 @@ module Theory : sig
       (** the constant register that always holds zero.  *)
       val zero : t
 
+      (** the constant register that always holds one.
+          @since 2.5.0 *)
+      val one : t
 
-      (** the program status register  *)
+      (** the program status register.  *)
       val status : t
+
+      (** a register for controlling operating system.  *)
+      val system : t
+
+      (** a register that controls CPU or other device.
+          @since 2.5.0 *)
+      val control : t
 
       (** the zero flag register
 
@@ -2009,7 +2443,19 @@ module Theory : sig
   (** The source code language.
 
       @since 2.2.0 *)
-  module Language : KB.Enum.S with type t = language
+  module Language : sig
+    include KB.Enum.S with type t = language
+
+
+    (** {3 Predefined languages}
+
+        @since 2.5.0 *)
+    val c : language
+    val cxx : language
+    val ada : language
+    val fortran : language
+    val pascal : language
+  end
 
   (** Defines how multibyte words are stored in the memory.
 
@@ -2038,19 +2484,94 @@ module Theory : sig
 
   (** The Operating System.
       @since 2.2.0  *)
-  module System : KB.Enum.S with type t = system
+  module System : sig
+    include KB.Enum.S with type t = system
+
+
+    (** {3 Predefined Operating System Interfaces}
+
+        @since 2.5.0 *)
+
+
+    (** Linux-based systems, including Android  *)
+    val linux : system
+
+    (** Darwin-based systems, including iOS, macOS *)
+    val darwin : system
+
+    (** VxWorks RTOS  *)
+    val vxworks : system
+
+    (** FreeBSD  *)
+    val freebsd : system
+
+    (** [OpenBSD]  *)
+    val openbsd : system
+
+    (** The MS Windows family of OSes  *)
+    val windows : system
+
+    (** MS-DOS and other DOSes  *)
+    val msdos : system
+
+    (** Unified Extensible Firmware Interface  *)
+    val uefi : system
+
+    (** standalone  *)
+    val none : system
+  end
 
   (** The Application Binary Interface name.
       @since 2.2.0 *)
-  module Abi : KB.Enum.S with type t = abi
+  module Abi : sig
+    include KB.Enum.S with type t = abi
+
+    (** {3 Predefined ABI}
+        @since 2.5.0 *)
+
+    (** GNU/SysV *)
+    val gnu : abi
+
+    (** ARM EABI (use gnu for linux targets)  *)
+    val eabi : abi
+
+    (** GNU ARM EABI  *)
+    val gnueabi : abi
+
+    val cdecl : abi
+    val stdcall : abi
+    val fastcall : abi
+    val watcom : abi
+    val ms : abi
+  end
 
   (** The Application Floating-point Binary Interface name.
       @since 2.2.0 *)
-  module Fabi : KB.Enum.S with type t = fabi
+  module Fabi : sig
+    include  KB.Enum.S with type t = fabi
+
+
+    (** {3 Predefined FABI}
+
+        @since 2.5.0 *)
+    val hard : fabi
+    val soft : fabi
+  end
 
   (** The file type that is used to pack the unit.
       @since 2.3.0 *)
-  module Filetype : KB.Enum.S with type t = filetype
+  module Filetype : sig
+    include KB.Enum.S with type t = filetype
+
+
+    (** {3 Predefined File Formats}
+
+        @since 2.5.0    *)
+    val elf : filetype
+    val coff : filetype
+    val macho : filetype
+    val aout : filetype
+  end
 
   (** Information about the compiler.
 
@@ -2076,6 +2597,12 @@ module Theory : sig
       ?version:string list ->
       ?options:string list ->
       string -> compiler
+
+
+    (** [name compiler] returns the compiler name.
+
+        @since 2.5.0  *)
+    val name : compiler -> string
 
     (** [version] the compiler version.
 
@@ -2120,7 +2647,7 @@ module Theory : sig
   type ('a,'b) mem = ('a,'b) Mem.t pure
 
 
-  (** a floating point term  *)
+  (** a floating-point term  *)
   type 'f float = 'f Float.t pure
 
 
@@ -2338,7 +2865,18 @@ module Theory : sig
     (** [seq x y] performs effect [x], after that perform effect [y].  *)
     val seq : 'a eff -> 'a eff -> 'a eff
 
-    (** [blk lbl data ctrl] a labeled sequence of effects. *)
+    (** [blk lbl data ctrl] an optionally labeled sequence of effects.
+
+        If [lbl] is [Label.null] then the block is unlabeled. If it is
+        not [Label.null] then the denotations will preserve the label
+        and assume that this [blk] is referenced from some other
+        blocks.
+
+        @since 2.4.0 the [blk] operator accepts (and welcomes)
+        [Label.null] as the label in cases when the block is not
+        really expected to be called from anywhere else.
+
+    *)
     val blk : label -> data eff -> ctrl eff -> unit eff
 
 
@@ -2501,47 +3039,47 @@ module Theory : sig
   end
 
 
-  (** The Basic Theory of Floating Points.
+  (** The Basic Theory of Floating-Points.
 
-      Floating point numbers represent a finite subset of the set of
+      floating-point numbers represent a finite subset of the set of
       real numbers. Some formats also extend this set with special
       values to represent infinities or error conditions. This, in
-      general, exceeds the scope of the floating point theory, however
+      general, exceeds the scope of the floating-point theory, however
       the theory includes predicates with domains that potentially may
-      include this special numbers, e.g., [is_nan]. For floating point
+      include this special numbers, e.g., [is_nan]. For floating-point
       formats that do not support special values, such predicates will
       become constant functions.
 
-      All operations in the Floating Point theory are defined in terms
-      of operations on real numbers. Since floating point numbers
+      All operations in the Floating-Point theory are defined in terms
+      of operations on real numbers. Since floating-point numbers
       represent only a subset of the real set,
       denotations select a number from the set of numbers of the
-      floating point sort using concrete rules expressed in terms of
+      floating-point sort using concrete rules expressed in terms of
       rounding modes. The rounding mode is a parameter of many
       operations, denoted with a term of sort [rmode].
 
   *)
   module type Fbasic = sig
 
-    (** [float s x] interprets [x] as a floating point number.  *)
+    (** [float s x] interprets [x] as a floating-point number.  *)
     val float : ('r,'s) format Float.t Value.sort -> 's bitv -> ('r,'s) format float
 
-    (** [fbits x] is a bitvector representation of the floating point number [x].  *)
+    (** [fbits x] is a bitvector representation of the floating-point number [x].  *)
     val fbits : ('r,'s) format float -> 's bitv
 
     (** [is_finite x] holds if [x] represents a finite number.
 
-        A floating point number is finite if it represents a
+        A floating-point number is finite if it represents a
         number from the set of real numbers [R].
 
         The predicate always holds for formats in which only finite
-        floating point numbers are representable.
+        floating-point numbers are representable.
     *)
     val is_finite : 'f float -> bool
 
     (** [is_nan x] holds if [x] represents a not-a-number.
 
-        A floating point value is not-a-number if it is neither finite
+        A floating-point value is not-a-number if it is neither finite
         nor infinite number.
 
         The predicated never holds for formats that represent only
@@ -2573,11 +3111,11 @@ module Theory : sig
 
     (** {3 Rounding modes}
 
-        Many operations in the Theory of Floating Point numbers are
+        Many operations in the Theory of Floating-Point numbers are
         defined using the rounding mode parameter.
 
         The rounding mode gives a precise meaning to the phrase
-        "the closest floating point number to [x]", where [x] is a
+        "the closest floating-point number to [x]", where [x] is a
         real number. When [x] is not representable by the given
         format, some other number [x'] is selected based on
         rules of the rounding mode.
@@ -2585,7 +3123,7 @@ module Theory : sig
 
     (** rounding to nearest, ties to even.
 
-        The denotation is the floating point number nearest to the
+        The denotation is the floating-point number nearest to the
         denoted real number. If the two nearest numbers are equally
         close, then the one with an even least significant digit shall
         be selected. The denotation is not defined, if both numbers
@@ -2595,7 +3133,7 @@ module Theory : sig
 
     (** rounding to nearest, ties away.
 
-        The denotation is the floating point number nearest to the
+        The denotation is the floating-point number nearest to the
         denoted real number. If the two nearest numbers are equally
         close, then the one with larger magnitude shall be selected.
     *)
@@ -2603,21 +3141,21 @@ module Theory : sig
 
     (** rounding towards positive.
 
-        The denotation is the floating point number that is nearest
+        The denotation is the floating-point number that is nearest
         but no less than the denoted real number.
     *)
     val rtp : rmode
 
     (** rounding towards negative.
 
-        The denotation is the floating point number that is nearest
+        The denotation is the floating-point number that is nearest
         but not greater than the denoted real number.
     *)
     val rtn : rmode
 
     (** rounding towards zero.
 
-        The denotation is the floating point number that is nearest
+        The denotation is the floating-point number that is nearest
         but not greater in magnitude than the denoted real number.
     *)
     val rtz : rmode
@@ -2633,7 +3171,7 @@ module Theory : sig
     val cast_float  : 'f Float.t Value.sort  -> rmode -> 'a bitv -> 'f float
 
 
-    (** [cast_sfloat s rm x] is the closest to [x] floating point number of sort [x].
+    (** [cast_sfloat s rm x] is the closest to [x] floating-point number of sort [x].
 
         The bitvector [x] is interpreted as a signed integer in the
         two-complement form.
@@ -2661,57 +3199,59 @@ module Theory : sig
     (** [fabs x] the absolute value of [x].  *)
     val fabs    : 'f float -> 'f float
 
-    (** [fadd m x y] is the floating point number closest to [x+y].  *)
+    (** [fadd m x y] is the floating-point number closest to [x+y].  *)
     val fadd    : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [fsub m x y] is the floating point number closest to [x-y].  *)
+    (** [fsub m x y] is the floating-point number closest to [x-y].  *)
     val fsub    : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [fmul m x y] is the floating point number closest to [x*y].  *)
+    (** [fmul m x y] is the floating-point number closest to [x*y].  *)
     val fmul    : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [fdiv m x y] is the floating point number closest to [x/y].  *)
+    (** [fdiv m x y] is the floating-point number closest to [x/y].  *)
     val fdiv    : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [fsqrt m x] is the floating point number closest to [sqrt x].
+    (** [fsqrt m x] returns the closest floating-point number to [r],
+        where [r] is such number that [r*r] is equal to [x].
 
-        The denotation is not defined if
-    *)
+        If [x] is a negative finite non-zero number, or is [nan],
+        or is the negative infinity, then [sqrt x] is [nan]. If [x] is
+        the positive infinity then [fsqrt x] is the positive infinity. *)
     val fsqrt   : rmode -> 'f float -> 'f float
 
-    (** [fdiv m x y] is the floating point number closest to the
+    (** [fdiv m x y] is the floating-point number closest to the
         remainder of [x/y].  *)
     val fmodulo : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [fmad m x y z] is the floating point number closest to [x * y + z].  *)
+    (** [fmad m x y z] is the floating-point number closest to [x * y + z].  *)
     val fmad    : rmode -> 'f float -> 'f float -> 'f float -> 'f float
 
 
-    (** [fround m x] is the floating point number closest to [x]
+    (** [fround m x] is the floating-point number closest to [x]
         rounded to an integral, using the rounding mode [m].   *)
     val fround   : rmode -> 'f float -> 'f float
 
     (** [fconvert f r x] is the closest to [x] floating number in format [f].  *)
     val fconvert : 'f Float.t Value.sort ->  rmode -> _ float -> 'f float
 
-    (** [fsucc m x] is the least floating point number representable
+    (** [fsucc m x] is the least floating-point number representable
         in (sort x) that is greater than [x].  *)
     val fsucc  : 'f float -> 'f float
 
-    (** [fsucc m x] is the greatest floating point number representable
+    (** [fsucc m x] is the greatest floating-point number representable
         in (sort x) that is less than [x].  *)
     val fpred  : 'f float -> 'f float
 
-    (** [forder x y] holds if floating point number [x] is less than [y].
+    (** [forder x y] holds if floating-point number [x] is less than [y].
 
         The denotation is not defined if either of arguments do not
-        represent a floating point number.
+        represent a floating-point number.
     *)
     val forder : 'f float -> 'f float -> bool
   end
 
 
-  (** The theory of floating point numbers modulo transcendental functions.
+  (** The theory of floating-point numbers modulo transcendental functions.
 
       This signature includes several functions that can be expressed
       in terms of a finite sequence of the operations of addition,
@@ -2735,7 +3275,7 @@ module Theory : sig
     include Fbasic
 
 
-    (** [pow m b a] is a floating point number closest to [b^a].
+    (** [pow m b a] is a floating-point number closest to [b^a].
 
         Where [b^a] is [b] raised to the power of [a].
 
@@ -2746,52 +3286,52 @@ module Theory : sig
     val pow : rmode -> 'f float -> 'f float -> 'f float
 
 
-    (** [compound m x n] is the floating point number closest to [(1+x)^n].
+    (** [compound m x n] is the floating-point number closest to [(1+x)^n].
 
         Where [b^a] is [b] raised to the power of [a].
 
         The denotation is not defined if [x] is less than [-1], or if
         [x] is [n] represent zeros, or if [x] doesn't represent a
-        finite floating point number.
+        finite floating-point number.
     *)
     val compound : rmode -> 'f float -> 'a bitv -> 'f float
 
 
-    (** [rootn m x n] is the floating point number closest to [x^(1/n)].
+    (** [rootn m x n] is the floating-point number closest to [x^(1/n)].
 
         Where [b^a] is [b] raised to the power of [a].
 
         The denotation is not defined if:
         - [n] is zero;
         - [x] is zero and n is less than zero;
-        - [x] is not a finite floating point number;
+        - [x] is not a finite floating-point number;
     *)
     val rootn    : rmode -> 'f float -> 'a bitv -> 'f float
 
 
-    (** [pown m x n] is the floating point number closest to [x^n].
+    (** [pown m x n] is the floating-point number closest to [x^n].
 
         Where [b^a] is [b] raised to the power of [a].
 
         The denotation is not defined if [x] and [n] both represent
-        zero or if [x] doesn't represent a finite floating point
+        zero or if [x] doesn't represent a finite floating-point
         number.
     *)
     val pown    : rmode -> 'f float -> 'a bitv -> 'f float
 
 
-    (** [rsqrt m x] is the closest floating point number to [1 / sqrt x].
+    (** [rsqrt m x] is the closest floating-point number to [1 / sqrt x].
 
         The denotation is not defined if [x] is less than or equal to
-        zero or doesn't represent a finite floating point number.
+        zero or doesn't represent a finite floating-point number.
     *)
     val rsqrt    : rmode -> 'f float -> 'f float
 
 
-    (** [hypot m x y] is the closest floating point number to [sqrt(x^2 + y^2)].
+    (** [hypot m x y] is the closest floating-point number to [sqrt(x^2 + y^2)].
 
         The denotation is not defined if [x] or [y] do not represent
-        finite floating point numbers. *)
+        finite floating-point numbers. *)
     val hypot    : rmode -> 'f float -> 'f float -> 'f float
   end
 
@@ -2800,113 +3340,113 @@ module Theory : sig
   module type Trans = sig
 
 
-    (** [exp m x] is the floating point number closes to [e^x],
+    (** [exp m x] is the floating-point number closest to [e^x],
 
         where [b^a] is [b] raised to the power of [a] and [e] is the
         base of natural logarithm.
     *)
     val exp      : rmode -> 'f float -> 'f float
 
-    (** [expm1 m x] is the floating point number closes to [e^x - 1],
+    (** [expm1 m x] is the floating-point number closest to [e^x - 1],
 
         where [b^a] is [b] raised to the power of [a] and [e] is the
         base of natural logarithm.
     *)
     val expm1    : rmode -> 'f float -> 'f float
 
-    (** [exp2 m x] is the floating point number closes to [2^x],
+    (** [exp2 m x] is the floating-point number closest to [2^x],
 
         where [b^a] is [b] raised to the power of [a].
     *)
     val exp2     : rmode -> 'f float -> 'f float
 
-    (** [exp2 m x] is the floating point number closes to [2^x - 1],
+    (** [exp2 m x] is the floating-point number closest to [2^x - 1],
 
         where [b^a] is [b] raised to the power of [a].
     *)
     val exp2m1   : rmode -> 'f float -> 'f float
 
-    (** [exp10 m x] is the floating point number closes to [10^x],
+    (** [exp10 m x] is the floating-point number closest to [10^x],
 
         where [b^a] is [b] raised to the power of [a].
     *)
     val exp10    : rmode -> 'f float -> 'f float
 
 
-    (** [exp10m1 m x] is the floating point number closes to [10^x - 1],
+    (** [exp10m1 m x] is the floating-point number closest to [10^x - 1],
 
         where [b^a] is [b] raised to the power of [a].
     *)
     val exp10m1  : rmode -> 'f float -> 'f float
 
 
-    (** [log m x] is the floating point number closest to [log x].  *)
+    (** [log m x] is the floating-point number closest to [log x].  *)
     val log      : rmode -> 'f float -> 'f float
 
-    (** [log2 m x] is the floating point number closest to [log x / log 2].  *)
+    (** [log2 m x] is the floating-point number closest to [log x / log 2].  *)
     val log2     : rmode -> 'f float -> 'f float
 
-    (** [log10 m x] is the floating point number closest to [log x / log 10].  *)
+    (** [log10 m x] is the floating-point number closest to [log x / log 10].  *)
     val log10    : rmode -> 'f float -> 'f float
 
-    (** [logp1 m x] is the floating point number closest to [log (1+x)].  *)
+    (** [logp1 m x] is the floating-point number closest to [log (1+x)].  *)
     val logp1    : rmode -> 'f float -> 'f float
 
-    (** [logp1 m x] is the floating point number closest to [log (1+x) / log 2].  *)
+    (** [logp1 m x] is the floating-point number closest to [log (1+x) / log 2].  *)
     val log2p1   : rmode -> 'f float -> 'f float
 
-    (** [logp1 m x] is the floating point number closest to [log (1+x) / log 10].  *)
+    (** [logp1 m x] is the floating-point number closest to [log (1+x) / log 10].  *)
     val log10p1  : rmode -> 'f float -> 'f float
 
-    (** [sin m x] is the floating point number closest to [sin x].  *)
+    (** [sin m x] is the floating-point number closest to [sin x].  *)
     val sin      : rmode -> 'f float -> 'f float
 
-    (** [cos m x] is the floating point number closest to [cos x].  *)
+    (** [cos m x] is the floating-point number closest to [cos x].  *)
     val cos      : rmode -> 'f float -> 'f float
 
-    (** [tan m x] is the floating point number closest to [tan x].  *)
+    (** [tan m x] is the floating-point number closest to [tan x].  *)
     val tan      : rmode -> 'f float -> 'f float
 
-    (** [sinpi m x] is the floating point number closest to [sin (pi*x)].  *)
+    (** [sinpi m x] is the floating-point number closest to [sin (pi*x)].  *)
     val sinpi    : rmode -> 'f float -> 'f float
 
-    (** [cospi m x] is the floating point number closest to [cos (pi*x)].  *)
+    (** [cospi m x] is the floating-point number closest to [cos (pi*x)].  *)
     val cospi    : rmode -> 'f float -> 'f float
 
-    (** [atanpi m y x] is the floating point number closest to [atan(y/x) / pi].  *)
+    (** [atanpi m y x] is the floating-point number closest to [atan(y/x) / pi].  *)
     val atanpi   : rmode -> 'f float -> 'f float
 
-    (** [atanpi m y x] is the floating point number closest to [atan(y/x) / (2*pi)].  *)
+    (** [atanpi m y x] is the floating-point number closest to [atan(y/x) / (2*pi)].  *)
     val atan2pi  : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [asin m x] is the floating point number closest to [asin x].  *)
+    (** [asin m x] is the floating-point number closest to [asin x].  *)
     val asin     : rmode -> 'f float -> 'f float
 
-    (** [acos m x] is the floating point number closest to [acos x].  *)
+    (** [acos m x] is the floating-point number closest to [acos x].  *)
     val acos     : rmode -> 'f float -> 'f float
 
-    (** [atan m x] is the floating point number closest to [atan x].  *)
+    (** [atan m x] is the floating-point number closest to [atan x].  *)
     val atan     : rmode -> 'f float -> 'f float
 
-    (** [atan2 m y x] is the floating point number closest to [atan (y/x)].  *)
+    (** [atan2 m y x] is the floating-point number closest to [atan (y/x)].  *)
     val atan2    : rmode -> 'f float -> 'f float -> 'f float
 
-    (** [sinh m x] is the floating point number closest to [sinh x].  *)
+    (** [sinh m x] is the floating-point number closest to [sinh x].  *)
     val sinh     : rmode -> 'f float -> 'f float
 
-    (** [cosh m x] is the floating point number closest to [cosh x].  *)
+    (** [cosh m x] is the floating-point number closest to [cosh x].  *)
     val cosh     : rmode -> 'f float -> 'f float
 
-    (** [tanh m x] is the floating point number closest to [tanh x].  *)
+    (** [tanh m x] is the floating-point number closest to [tanh x].  *)
     val tanh     : rmode -> 'f float -> 'f float
 
-    (** [asinh m x] is the floating point number closest to [asinh x].  *)
+    (** [asinh m x] is the floating-point number closest to [asinh x].  *)
     val asinh    : rmode -> 'f float -> 'f float
 
-    (** [acosh m x] is the floating point number closest to [acosh x].  *)
+    (** [acosh m x] is the floating-point number closest to [acosh x].  *)
     val acosh    : rmode -> 'f float -> 'f float
 
-    (** [atanh m x] is the floating point number closest to [atanh x].  *)
+    (** [atanh m x] is the floating-point number closest to [atanh x].  *)
     val atanh    : rmode -> 'f float -> 'f float
   end
 
@@ -2914,7 +3454,7 @@ module Theory : sig
   (** The Core Theory signature.
 
       The Core Theory signature includes operations on booleans, bitvectors,
-      floating point numbers, and memories, as well as denotations of
+      floating-point numbers, and memories, as well as denotations of
       various control-flow and data-flow effects.
   *)
   module type Core = sig
@@ -2984,22 +3524,30 @@ module Theory : sig
     (module Core) knowledge ->
     unit
 
-  (** [instance ()] creates an instance of the Core Theory.
+  (** [instance ()] returns the current or creates a new instance of
+      the core theory.
 
-      The instance is built from all theories that match the context
-      specified by the [features] list and provide features specified
-      by the [requires] list. If any theory is subsumed by other
-      theory, then it is excluded.
+      If no parameters of the [instance] function were specialized
+      and there is an instance of the current theory then this
+      instance is returned.
 
-      If no instances satisfy this requirement than the empty theory
+      Otherwise, the instance is built from all theories that match
+      the context specified by the [context] list and provide features
+      specified by the [requires] list. If any theory is subsumed by
+      other theory, then it is excluded.
+
+      If no instances satisfy this requirement then the empty theory
       is returned. If only one theory satisfies the requirement, then
       it is returned. If many theories match, then a join of all
       theories is computed, stored in the knowledge base, and the
       resulting theory is returned.
 
-      To manifest a theory into an structure, use the [require] function.
+      To manifest a theory into an structure, use the [require]
+      function. The [current] function is equivalent to the
+      composition [instance >=> require], use this function, if you
+      want to use the current theory.
 
-      @param features is a set of features that define the context,
+      @param context is a set of features that define the context,
       only those theories that have a context that is a subset of
       provided will be instantiated.
 
@@ -3007,6 +3555,8 @@ module Theory : sig
       required. Defaults to the set of all possible features, i.e., if
       unspecified, then all instances applicable to the context will
       be loaded.
+
+      @since 2.4.0 respects the currently set theory.
   *)
   val instance :
     ?context:string list ->
@@ -3016,15 +3566,19 @@ module Theory : sig
   (** [require theory] manifests the [theory] as an OCaml structure.
 
       It is only possible to create an instance of theory using the
-      {!instance} function. For example, the following will create an
-      theory that is a join all currently declared theories (which are
-      not specific to any context),
+      {!instance} function, but see also {!current}.
+
+      For example, the following will create an theory that is a join
+      all currently declared theories (which are not specific to any
+      context),
 
       {[
-        Theory.(instance>=>require) () -> fun (module Core) ->
+        let* (module CT) = Theory.(instance>=>require) () in
       ]}
 
-      To a create an instance for a specific context and requirements,
+      where [let*] comes from [KB.Let].
+
+      To create an instance for a specific context and requirements,
 
       {[
         Theory.instance ()
@@ -3043,10 +3597,72 @@ module Theory : sig
   *)
   val require : theory -> (module Core) knowledge
 
+
+
+  (** [current] returns the current core theory structure.
+
+      This function is the same as [instance >=> require].
+
+      If there is no current theory set in the contex (via the
+      {!with_current} function) then a new structure is created,
+      otherwise returns the current selected theory.
+
+      An example of usage,
+
+      {[
+        let add x y =
+          let* (module CT) = current in
+          CT.add x y
+      ]}
+
+      @since 2.4.0
+  *)
+  val current : (module Core) knowledge
+
+  (** [with_current t f] sets [t] as the current theory in the scope of [f].
+
+      Evaluates compuation [f] in the theory of [t]. After [f] is
+      evaluated the current theory is restored. This function could be
+      safely called recursively, i.e., in a scope of another call to
+      [with_current]. Effectively, [with_current], which uses
+      [KB.Context.with_var] underneath the hood, creates a dynamic
+      scope for the theory variable.
+
+      @since 2.4.0
+  *)
+  val with_current : theory -> (unit -> 'a knowledge) -> 'a knowledge
+
+
+  (** Core Theory Transformations.
+
+      A transformation pass is a simple functor. This module provides
+      a collection of such functors and will be later extended with
+      the transformation pipeline framework.
+
+      @since 2.4.0
+  *)
+  module Pass : sig
+
+
+    (** The Variable Desugarer.
+
+        De-aliaes registers according to the aliasing
+        specification. Also follows the semantics of the constant
+        registers, e.g., translates assignments to registers that are
+        constants to nops and concretizes access to the zero
+        registers.
+
+        This pass is automatically applied to any theory instantiated
+        with {!instance} but it could be used for custom theories used
+        directly as arguments to functors.
+    *)
+    module Desugar(CT : Core) : Core
+  end
+
   (** Sorts implementing IEEE754 formats.
 
       This module provides an infinite set of indexed sorts for
-      floating point numbers defined in the IEEE754 standard.
+      floating-point numbers defined in the IEEE754 standard.
 
       This sorts are not referenced in the Core Theory (or any other
       theory in this library) and provided for user convenience. Any
@@ -3878,10 +4494,10 @@ module Theory : sig
       end
 
 
-      (** Floating point expressions.  *)
+      (** floating-point expressions.  *)
       module type Float = sig
 
-        (** an abstract type denoting a Core Theory floating point term.  *)
+        (** an abstract type denoting a Core Theory floating-point term.  *)
         type t
 
         (** the type of expressions of the target language.    *)

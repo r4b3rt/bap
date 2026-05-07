@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 include Self()
 open Option.Monad_infix
@@ -109,4 +109,7 @@ let () =
     `S "SEE ALSO";
     `P "$(b,bap-plugin-api)(1)"
   ];
-  Config.when_ready (fun _ -> Project.register_pass ~deps:["abi"] main)
+  Config.declare_extension
+    ~doc:"annotates callsites with subroutines arguments"
+    ~provides:["pass"]
+    (fun _ -> Project.register_pass ~deps:["abi"] main)

@@ -1,7 +1,7 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Bap_core_theory
-open Bap_common
+open Bap_common_types
 open Bap_bil
 open Bap_value
 open Bap_visitor
@@ -103,6 +103,12 @@ module Term : sig
   val del_attr : 'a t -> 'b tag -> 'a t
   val has_attr : 'a t -> 'b tag -> bool
   val with_attrs : 'a t -> Dict.t -> 'a t
+
+  module KB : sig
+    val map : ('a,'b) cls -> 'a t -> f:('b t -> 'b t KB.t) -> 'a t KB.t
+    val filter_map : ('a,'b) cls -> 'a t -> f:('b t -> 'b t option KB.t) -> 'a t KB.t
+    val filter : ('a,'b) cls -> 'a t -> f:('b t -> bool KB.t) -> 'a t KB.t
+  end
 
   val origin : tid tag
   val synthetic : unit tag
@@ -231,6 +237,7 @@ module Ir_sub : sig
   val returns_twice : unit tag
   val nothrow : unit tag
   val entry_point : unit tag
+  val intrinsic : unit tag
   val pp_slots : string list -> Format.formatter -> t -> unit
   include Regular.S with type t := t
 end

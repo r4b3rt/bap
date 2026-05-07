@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_primus.Std
 open Monads.Std
@@ -106,7 +106,7 @@ type tainter = {
   indirect : objects Primus.Value.Map.t;
 } [@@deriving fields]
 
-type relation_kind = Direct | Indirect [@@deriving sexp_of]
+type relation_kind = Direct | Indirect [@@deriving compare, sexp_of]
 
 (* generalized access to the tainter fields
  *
@@ -149,7 +149,7 @@ let vid = Primus.Value.id
 
 let indirect = Rel {
     field = Fields_of_tainter.indirect;
-    key = ident;
+    key = Fn.id;
     kind = Indirect;
   }
 let direct = Rel {
@@ -171,8 +171,14 @@ end
 
 module Rel = struct
   type t = relation
+
   let direct = direct
   let indirect = indirect
+
+  let compare (Rel {kind = x; _}) (Rel {kind = y; _}) =
+    compare_relation_kind x y
+
+  let equal x y = compare x y = 0
 end
 
 (* a set of live tainted objects *)
@@ -261,8 +267,6 @@ module Taint = struct
               | Some taints -> Set.add taints taint)) >>= fun indirect ->
       Machine.Local.put tainter {s with indirect} >>| fun () ->
       taint
-
-    exception Bad_object of Primus.value
 
     let kill_objects kill =
       Map.filter_map ~f:(fun objects ->

@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_primus.Std
 
@@ -103,7 +103,10 @@ end
 
 let enable = Config.flag "enable"
 
-let () = Config.when_ready @@ fun {Config.get} ->
+let () = Config.declare_extension
+    ~doc:"a constant tracking analysis based on Primus"
+    ~provides:["primus"; "lisp"; "analysis"]
+  @@ fun {Config.get} ->
   Primus.Machine.add_component (module Primitives) [@warning "-D"];
   Primus.Components.register_generic "constant-tracker-primitives"
     (module Primitives)

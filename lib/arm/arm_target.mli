@@ -21,7 +21,18 @@ val thumb : Theory.role
     Each version is the parent to the following version, with [parent]
     being the the earliest version.*)
 module LE : sig
-  val parent : Theory.Target.t (** currently the same as [v4]  *)
+  val parent : Theory.Target.t
+
+  (** a generic 32-bit target that accomodates all 32-bit targets.
+
+      @since 2.5.0  *)
+  val aarch32 : Theory.Target.t
+
+  (** a generic 64-bit target that accomodates all 64-bit targets.
+
+      @since 2.5.0 *)
+  val aarch64 : Theory.Target.t
+
   val v4 : Theory.Target.t
   val v4t : Theory.Target.t
   val v5 : Theory.Target.t
@@ -33,17 +44,20 @@ module LE : sig
   val v6z : Theory.Target.t
   val v6k : Theory.Target.t
   val v6m : Theory.Target.t
-  val v7 : Theory.Target.t
   val v7fp : Theory.Target.t
   val v7a : Theory.Target.t
   val v7afp : Theory.Target.t
   val v8a : Theory.Target.t
+  val v8a32 : Theory.Target.t
+  val v8m32 : Theory.Target.t
+  val v8r32 : Theory.Target.t
   val v81a : Theory.Target.t
   val v82a : Theory.Target.t
   val v83a : Theory.Target.t
   val v84a : Theory.Target.t
   val v85a : Theory.Target.t
   val v86a : Theory.Target.t
+  val v9a : Theory.Target.t
 end
 
 
@@ -69,12 +83,16 @@ module EB : sig
   val v7a : Theory.Target.t
   val v7afp : Theory.Target.t
   val v8a : Theory.Target.t
+  val v8a32 : Theory.Target.t
+  val v8m32 : Theory.Target.t
+  val v8r32 : Theory.Target.t
   val v81a : Theory.Target.t
   val v82a : Theory.Target.t
   val v83a : Theory.Target.t
   val v84a : Theory.Target.t
   val v85a : Theory.Target.t
   val v86a : Theory.Target.t
+  val v9a : Theory.Target.t
 end
 
 
@@ -90,12 +108,16 @@ module Bi : sig
   val v7a : Theory.Target.t
   val v7afp : Theory.Target.t
   val v8a : Theory.Target.t
+  val v8a32 : Theory.Target.t
+  val v8m32 : Theory.Target.t
+  val v8r32 : Theory.Target.t
   val v81a : Theory.Target.t
   val v82a : Theory.Target.t
   val v83a : Theory.Target.t
   val v84a : Theory.Target.t
   val v85a : Theory.Target.t
   val v86a : Theory.Target.t
+  val v9a : Theory.Target.t
 end
 
 val llvm_a32 : Theory.language
@@ -108,11 +130,17 @@ val llvm_a64 : Theory.language
     This includes parsing the loader output and enabling backward
     compatibility with the old [Arch.t] representation.
 
-    @param [interworking] if set disables/enables the interworking
+    @param interworking if set disables/enables the interworking
     mode (switching between arm and thumb modes). If not set, then
     the presence of interworking is detected using heurisitics. Right
     now if the heuristic looks into the symbol table and if there is
     a symbol there with an odd address (which is used to indicate
     thumb encoding) then interworking is enabled.
+
+    @param features is the backend-specific list of features. The
+    syntax is vastly dependent on the backend. For llvm, in
+    particular, the features are translated to the disassembler
+    attributes. If the feature doesn't start with [+] or [-] then it
+    is assumed that the feature is enabled and [+] is prepended.
 *)
-val load : ?interworking:bool -> unit -> unit
+val load : ?features:string list -> ?interworking:bool -> ?backend:string -> unit -> unit

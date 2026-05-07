@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Regular.Std
 open Monads.Std
@@ -257,9 +257,12 @@ end
 let main _proj =
   Primus.Machine.add_component (module Hunter) [@warning "-D"]
 
-let () = (Config.when_ready (fun _ ->
-    Primus.Components.register_generic "beagle-hunter" (module Hunter)
-      ~package:"bap"
-      ~desc:"Monitors execution and detects data that looks like \
-             words from the provided dictionary.";
-    Project.register_pass' ~deps:["strings-collect"] main))
+let () = Config.declare_extension
+    ~doc:"microx-powered obfuscated string solver"
+    ~provides:["deobfuscator"; "microx"; "primus"; "pass"; "string"; "analysis"]
+  @@ fun _ ->
+  Primus.Components.register_generic "beagle-hunter" (module Hunter)
+    ~package:"bap"
+    ~desc:"Monitors execution and detects data that looks like \
+           words from the provided dictionary.";
+  Project.register_pass' ~deps:["strings-collect"] main

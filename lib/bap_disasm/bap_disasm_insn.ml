@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Regular.Std
 open Bap_types.Std
@@ -47,7 +47,7 @@ module Props = struct
   let has flags (flag,_) =
     [%compare.equal : t] (Z.logand flags flag) flag
   let set_if cond flag =
-    if cond then fun flags -> flags + flag else ident
+    if cond then fun flags -> flags + flag else Fn.id
 
   module T = struct
     type t = Z.t
@@ -81,7 +81,6 @@ end
 
 type t = Theory.Semantics.t
 type op = Op.t [@@deriving bin_io, compare, sexp]
-
 
 module Slot = struct
   type 'a t = (Theory.Effect.cls, 'a) KB.slot
@@ -166,63 +165,104 @@ module Slot = struct
       ~persistent
       ~public:true
       ~desc:"a set of destinations of a control-flow instruction"
+
+
+  type KB.Conflict.t += Different_sizes
+
+  let subs =
+    let dom = Theory.Semantics.domain in
+    let open KB.Order in
+    let exception Escape of KB.Conflict.t in
+    let order x y = match x,y with
+      | [||],[||] -> EQ
+      | [||],_ -> LT
+      | _,[||] -> GT
+      | xs, ys ->
+        if Array.length xs <> Array.length ys then NC
+        else Array.fold2_exn xs ys ~init:EQ ~f:(fun result x y ->
+            match result with
+            | NC -> NC
+            | _ -> match result, KB.Domain.order dom x y with
+              | EQ, GT -> GT
+              | EQ, LT -> LT
+              | r, r' -> if Poly.equal r r' then r' else NC) in
+    let join xs ys = match xs, ys with
+      | [||],x | x,[||] -> Ok x
+      | xs, ys ->
+        try
+          if Array.length xs <> Array.length ys
+          then Error Different_sizes
+          else Result.return @@ Array.map2_exn xs ys ~f:(fun x y ->
+              match KB.Domain.join dom x y with
+              | Ok z -> z
+              | Error problem -> raise (Escape problem))
+        with Escape problem -> Error problem in
+    let inspect xs =
+      Sexp.List (List.map ~f:(KB.Domain.inspect dom)
+                   (Array.to_list xs)) in
+    let domain = KB.Domain.define ~empty:[||] "instructions"
+        ~order ~join ~inspect in
+    KB.Class.property Theory.Semantics.cls "subinstructions"
+      ~package:"bap"
+      ~public:true
+      ~desc:"a sequence of subinstructions"
+      ~persistent:(KB.Persistent.of_binable (module struct
+                     type t = Theory.Semantics.t array [@@deriving bin_io]
+                   end))
+      domain
 end
 
-let normalize_asm asm =
-  String.substr_replace_all asm ~pattern:"\t"
-    ~with_:" " |> String.strip
+module Analyzer = struct
+  module Effects = Set.Make(struct
+      type t = Kind.t [@@deriving compare, sexp]
+    end)
+  type vis = {
+    jump : bool;
+    cond : bool;
+    indirect : bool;
+  }
 
-type vis = {
-  jump : bool;
-  cond : bool;
-  indirect : bool;
-}
+  let no_jumps = {jump=false;cond=false;indirect=false}
 
-let lookup_jumps bil =
-  let jump ?(cond=false) v = { v with jump = true; cond } in
-  let conditional v = jump ~cond:true v in
-  let indirect f v = f { v with indirect=true } in
-  let cons check x xs = if check then x :: xs else xs in
-  (object
-    inherit [vis] Stmt.visitor
-    method! enter_jmp ex vis = match ex with
-      | Bil.Int _ when under_condition -> conditional vis
-      | Bil.Int _ -> jump vis
-      | _ when under_condition -> indirect conditional vis
-      | _ -> indirect jump vis
-  end)#run bil {jump=false;cond=false;indirect=false} |> fun v ->
-  if not v.jump then []
-  else
-    cons (not v.cond) `Unconditional_branch [] |>
-    cons v.cond `Conditional_branch |>
-    cons v.indirect `Indirect_branch
+  let analyzer =
+    let jump ?(cond=false) v = { v with jump = true; cond } in
+    let conditional v = jump ~cond:true v in
+    let indirect f v = f { v with indirect=true } in
+    object
+      inherit [Effects.t * vis] Stmt.visitor as super
+      method! enter_store ~mem:_ ~addr:_ ~exp:_ _ _ (effs,jumps) =
+        Set.add effs `May_store,jumps
+      method! enter_load ~mem:_ ~addr:_ _ _ (effs,jumps) =
+        Set.add effs `May_load,jumps
+      method! enter_jmp ex (effs,jumps) = effs,match ex with
+        | Bil.Int _ when under_condition -> conditional jumps
+        | Bil.Int _ -> jump jumps
+        | _ when under_condition -> indirect conditional jumps
+        | _ -> indirect jump jumps
+      method! enter_stmt s (effs,jumps) = match Bil.(decode call s) with
+        | None -> super#enter_stmt s (effs,jumps)
+        | Some _ -> Effects.add effs `Call, jumps
+    end
 
-let lookup_side_effects bil = (object
-  inherit [kind list] Stmt.visitor
-  method! enter_store ~mem:_ ~addr:_ ~exp:_ _ _ acc =
-    `May_store :: acc
-  method! enter_load ~mem:_ ~addr:_ _ _ acc =
-    `May_load :: acc
-end)#run bil []
-
-let (<--) slot value insn = KB.Value.put slot insn value
-
-let write init ops =
-  List.fold ~init ops ~f:(fun init f -> f init)
+  let run bil =
+    let cons c = Fn.flip @@ if c then Effects.add else Fn.const in
+    let effs,jump = analyzer#run bil (Effects.empty,no_jumps) in
+    if not jump.jump then effs
+    else
+      cons (not jump.cond) `Unconditional_branch effs |>
+      cons jump.cond `Conditional_branch |>
+      cons jump.indirect `Indirect_branch
+end
 
 let derive_props ?bil insn =
-  let bil_kinds = match bil with
-    | Some bil -> lookup_jumps bil @ lookup_side_effects bil
-    | None -> [] in
+  let bil_effects = match bil with
+    | Some bil -> Analyzer.run bil
+    | None -> Analyzer.Effects.empty in
   let is = Insn.is insn in
-  let is_bil kind =
-    if Option.is_some bil
-    then List.mem ~equal:[%compare.equal : kind] bil_kinds kind
-    else is kind in
-  (* those two are the only which we can't get from the BIL semantics *)
+  let is_bil = if Option.is_some bil
+    then Analyzer.Effects.mem bil_effects else is in
   let is_return = is `Return in
-  let is_call = is `Call in
-
+  let is_call = is_bil `Call || is `Call in
   let is_conditional_jump = is_bil `Conditional_branch in
   let is_jump = is_conditional_jump || is_bil `Unconditional_branch in
   let is_indirect_jump = is_bil `Indirect_branch in
@@ -243,10 +283,15 @@ let derive_props ?bil insn =
   Props.set_if may_load load                               |>
   Props.set_if may_store store
 
+let (<--) slot value insn = KB.Value.put slot insn value
+
+let write init ops =
+  List.fold ~init ops ~f:(fun init f -> f init)
+
 let set_basic effect insn : t =
   write effect Slot.[
       name <-- Insn.name insn;
-      asm <-- normalize_asm (Insn.asm insn);
+      asm <-- Insn.asm insn;
       ops <-- Some (Insn.ops insn);
     ]
 
@@ -276,7 +321,7 @@ let should = must
 let shouldn't = mustn't
 
 let name = KB.Value.get Slot.name
-let asm = KB.Value.get Slot.asm
+let asm  = KB.Value.get Slot.asm
 let bil insn = KB.Value.get Bil.slot insn
 let ops s = match KB.Value.get Slot.ops s with
   | None -> [||]
@@ -354,7 +399,37 @@ include Regular.Make(struct
   end)
 
 let pp_asm ppf insn =
-  Format.fprintf ppf "%s" (normalize_asm (asm insn))
+  Format.fprintf ppf "%s" (asm insn)
+
+
+module Seqnum = struct
+  type t = int
+  let slot = KB.Class.property Theory.Program.cls "seqnum"
+      ~public:true
+      ~persistent:(KB.Persistent.of_binable (module struct
+                     type t = Int.t option [@@deriving bin_io]
+                   end))
+      ~desc:"the sequential number of a subinstruction"
+      ~package:"bap" @@
+    KB.Domain.optional "int"
+      ~inspect:Int.sexp_of_t
+      ~equal:Int.equal
+
+  let freshnum =
+    let cls = KB.Class.declare "seqnum-generator" ()
+        ~package:"bap" in
+    let open KB.Syntax in
+    KB.Object.create cls >>| KB.Object.id >>| Int63.to_int_exn
+
+  let label ?package num =
+    let open KB.Syntax in
+    let s = Format.asprintf "subinstruction#%a" Int.pp num in
+    KB.Symbol.intern ?package s Theory.Program.cls >>= fun obj ->
+    KB.provide slot obj (Some num) >>| fun () ->
+    obj
+
+  let fresh = KB.Syntax.(freshnum >>= label)
+end
 
 let () =
   Data.Write.create ~pp:Adt.pp () |>

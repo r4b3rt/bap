@@ -54,10 +54,11 @@ bap dependency /bin/ls --root=/mnt/image --ldconfig='cat ld.so.cache'
 ```
 "
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Regular.Std
 open Bap_main
+module Sys = Caml.Sys
 
 include Loggers()
 
@@ -366,6 +367,7 @@ let ldconfig = Extension.Command.parameter
 
 let root = Extension.Command.parameter
     Extension.Type.(some string) "root"
+    ~aliases:["R"]
     ~doc: "Specify the default root directory. \
            All absolute paths (including those that are specified \
            on the command line) are prefixed with the specified root."
@@ -396,3 +398,9 @@ let () = Extension.Command.(begin
   let r = State.load ?root ?ldconfig ~recursive ~context paths input in
   Format.printf "%a@." (pp fmt) r;
   Ok ()
+
+
+let () = Extension.declare
+    ~doc
+    ~provides:["depedencies"; "command"]
+    (fun _ -> Ok ())

@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Bap_types.Std
 open Bap_core_theory
@@ -81,10 +81,6 @@ end
 
 
 module Table = struct
-  (* Bigstring.length is very slow... we should report a bug to the
-     mantis. They need to add "noalloc" to it, otherwise on each call
-     the whole GC machinery is triggered. For now we will store the
-     size, so that later we can check it for free. *)
   type t = {
     data : Bigstring.t;
     size : int;
@@ -150,7 +146,9 @@ module Reg = struct
         if reg_code = 0 then "Nil"
         else
           let off = C.insn_op_reg_name !!dis ~insn ~oper in
-          (Table.lookup (get dis).reg_table off) in
+          if reg_code < 0
+          then sprintf "%c%d" (Char.of_int_exn off) ~-reg_code
+          else Table.lookup (get dis).reg_table off in
       {reg_code; reg_name} in
     {insn; oper; data}
 
@@ -215,7 +213,7 @@ module Imm = struct
     let hash {data = n} =
       if fits n.imm_small
       then n.imm_small
-      else Int64.hash (uw n.imm_large)
+      else Int64.hash (Option.value_exn n.imm_large)
 
   end
   include T
@@ -321,40 +319,72 @@ module Insn = struct
     encoding : string;
     code : int;
     name : string;
-    asm  : bytes;
+    asm  : string;
     kinds: kind list;
     opers: Op.t array;
+    subs : ins_info array;
   }
   type ('a,'k) t = ins_info
 
-  let sexp_of_t ins =
+  let rec sexp_of_t ins =
     let name = ins.name in
     let ops = Array.to_list ins.opers in
-    Sexp.List (Sexp.Atom name :: List.map ops ~f:(fun op ->
-        Sexp.Atom (Op.to_string op)))
+    let parent =
+      Sexp.List (Sexp.Atom name :: List.map ops ~f:(fun op ->
+          Sexp.Atom (Op.to_string op))) in
+    if Array.length ins.subs > 0
+    then
+      let subs = Array.map ins.subs ~f:sexp_of_t in
+      Sexp.List (parent :: Array.to_list subs)
+    else parent
 
   let compare {code=x} {code=y} = Int.compare x y
 
   let name {name = x} = x
   let code op = op.code
-  let asm  x = Bytes.to_string x.asm
+  let asm  x = x.asm
   let ops  x = x.opers
   let kinds x = x.kinds
+  let subs x = x.subs
   let is op x =
     let equal x y = Kind.compare x y = 0 in
     List.mem ~equal op.kinds x
 
-  let create ~asm ~kinds dis ~insn =
+  let normalize_asm asm =
+    String.substr_replace_all asm ~pattern:"\t"
+      ~with_:" " |> String.strip
+
+  let rec create ?parent ~asm ~kinds dis ~insn =
+    let subs = Hashtbl.create (module Int) in
+    let opers =
+      Array.init (C.insn_ops_size !!dis ~insn) ~f:(fun oper ->
+          match C.insn_op_type !!dis ~insn ~oper with
+          | Reg -> Op.Reg Reg.(create dis ~insn ~oper)
+          | Imm -> Op.Imm Imm.(create dis ~insn ~oper)
+          | Fmm -> Op.Fmm Fmm.(create dis ~insn ~oper)
+          | Insn ->
+            let v = Imm.(create dis ~insn ~oper) in
+            let id = v.data.imm_small in
+            let sub = create ~parent:insn ~asm ~kinds dis ~insn:id in
+            let pos = Hashtbl.length subs in
+            Hashtbl.add_exn subs pos sub;
+            Op.Imm {v with data = {imm_small=pos; imm_large=None}}) in
+    let subs = Array.init (Hashtbl.length subs)
+        ~f:(Hashtbl.find_exn subs) in
     let code = C.insn_code !!dis ~insn in
-    let name =
+    let fullname =
       let off = C.insn_name !!dis ~insn in
+      KB.Name.read ~package:dis.enc @@
       Table.lookup (get dis).insn_table off in
+    let name = KB.Name.unqualified fullname
+    and encoding = KB.Name.package fullname in
+    let insn = Option.value parent ~default:insn in
     let asm =
       if asm then
         let data = Bytes.create (C.insn_asm_size !!dis ~insn) in
         C.insn_asm_copy !!dis ~insn data;
-        data
-      else Bytes.empty in
+        normalize_asm @@ Bytes.to_string data
+      else "" in
     let kinds =
       if kinds then
         List.fold Kind.all ~init:[] ~f:(fun ks k ->
@@ -364,14 +394,7 @@ module Insn = struct
             then k :: ks
             else ks)
       else [] in
-    let opers =
-      Array.init (C.insn_ops_size !!dis ~insn) ~f:(fun oper ->
-          match C.insn_op_type !!dis ~insn ~oper with
-          | Reg -> Op.Reg Reg.(create dis ~insn ~oper)
-          | Imm -> Op.Imm Imm.(create dis ~insn ~oper)
-          | Fmm -> Op.Fmm Fmm.(create dis ~insn ~oper)
-          | Insn -> assert false) in
-    {code; name; asm; kinds; opers; encoding = dis.enc }
+    {code; name; asm; kinds; opers; encoding; subs }
 
   let encoding x = x.encoding
 
@@ -397,7 +420,7 @@ let sexp_of_full_insn = sexp_of_insn
 let compare_full_insn i1 i2 =
   let open Insn in
   let r1 = Int.compare i1.code i2.code in
-  if r1 <> 0 then Bytes.compare i1.asm i2.asm
+  if r1 <> 0 then String.compare i1.asm i2.asm
   else r1
 
 
@@ -561,6 +584,9 @@ let make_name target encoding =
     (Theory.Language.to_string encoding)
     (Theory.Target.to_string target)
 
+let encoding_name encoding =
+  KB.Name.unqualified @@ Theory.Language.name encoding
+
 let register encoding construct =
   if Hashtbl.mem constructors encoding
   then invalid_argf "A disassembler backend for the encoding %s \
@@ -578,10 +604,7 @@ let register encoding construct =
           d.users <- d.users + 1;
           Hashtbl.add_exn disassemblers ~key:name ~data:d
         end;
-        Ok dis)
-
-let encoding_name encoding =
-  KB.Name.unqualified @@ Theory.Language.name encoding
+        Ok {dis with enc = encoding_name encoding})
 
 let lookup target encoding =
   let name = make_name target encoding in
@@ -595,7 +618,9 @@ let lookup target encoding =
     | Some create -> create target
 
 let create ?(debug_level=0) ?(cpu="") ?(attrs="") ?(backend="llvm") triple =
-  let name = sprintf "%s-%s%s" backend triple cpu in
+  let parts = [backend; triple; cpu] |>
+              List.filter ~f:(Fn.non String.is_empty) in
+  let name = String.concat ~sep:"-" parts ^ attrs in
   match Hashtbl.find disassemblers name with
   | Some d ->
     d.users <- d.users + 1;
@@ -633,10 +658,7 @@ let with_disasm ?debug_level ?cpu ?backend triple ~f =
   create ?debug_level ?cpu ?backend triple >>= fun dis ->
   f dis >>| fun res -> close dis; res
 
-let switch : ('a,'k,'s,'r) state -> ('a,'k) t -> ('a,'k,'s,'r) state = fun s dis ->
-  let s = {s with dis} in
-  reset_predicates s s.current.preds;
-  s
+let switch s dis = {s with dis}
 
 let run ?backlog ?(stop_on=[]) ?invalid ?stopped ?hit dis ~return ~init mem =
   let state =

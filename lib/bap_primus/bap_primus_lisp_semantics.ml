@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_core_theory
 open Monads.Std
@@ -8,32 +8,45 @@ open Bap_primus_lisp_attributes
 
 module Attribute = Bap_primus_lisp_attribute
 module Program = Bap_primus_lisp_program
+module Context = Bap_primus_lisp_context
 module Source = Bap_primus_lisp_source
 module Resolve = Bap_primus_lisp_resolve
 module Def = Bap_primus_lisp_def
 module Type = Bap_primus_lisp_type
 module Key = Bap_primus_lisp_program.Items
 
-module Meta = struct
-  module State = struct
-    type t = {
-      binds : unit Theory.Value.t Map.M(Theory.Var.Top).t;
-      arith : (module Bitvec.S);
-      scope : unit Theory.var list Map.M(Theory.Var.Top).t;
-    }
-  end
-  include Monad.State.T1(State)(KB)
-  include Monad.State.Make(State)(KB)
+open KB.Syntax
+open KB.Let
+
+module State = struct
+  type t = {
+    binds : unit Theory.Value.t Map.M(Theory.Var.Top).t;
+    arith : (module Bitvec.S);
+    scope : unit Theory.var list Map.M(Theory.Var.Top).t;
+  }
+
+  let empty = {
+    binds = Map.empty (module Theory.Var.Top);
+    arith = (module Bitvec.M32);
+    scope = Map.empty (module Theory.Var.Top);
+  }
+
+  let var = KB.Context.declare ~package:"bap" "lisp-interpter-state"
+      !!empty
+
+
+  let get = KB.Context.get var
+  let set = KB.Context.set var
+  let update = KB.Context.update var
 end
 
-open Meta.Syntax
-open Meta.Let
 
 type value = unit Theory.Value.t
 type effect = unit Theory.Effect.t
 
-type KB.Conflict.t += Unresolved_definition of string
-                   | User_error of string
+type KB.Conflict.t +=
+  | Unresolved_definition of string
+  | User_error of string
 
 let package = "bap"
 let language = Theory.Language.declare ~package "primus-lisp"
@@ -46,13 +59,16 @@ let program =
     ~empty:Program.empty
     ~equal:Program.equal
     ~join:(fun x y -> Ok (Program.merge x y))
-    ~inspect:(fun p ->
-        let r = Format.asprintf "%a" Program.pp p in
-        Sexp.Atom r)
+
+let context = Context.slot
+
+
+type kind = Prim | Defn | Meth | Data [@@deriving sexp]
 
 type program = {
   prog : Program.t;
   places : unit Theory.var Map.M(KB.Name).t;
+  names : kind Map.M(KB.Name).t;
 }
 
 let typed = KB.Class.property Theory.Source.cls "typed-program"
@@ -61,16 +77,33 @@ let typed = KB.Class.property Theory.Source.cls "typed-program"
     ~equal:(fun x y ->
         Program.equal x.prog y.prog)
 
-let fail s = Meta.lift (KB.fail s)
 
-let unresolved problem =
-  let msg = Format.asprintf "%a" Resolve.pp_resolution problem in
-  fail (Unresolved_definition msg)
+type problem =
+  | Resolution of Resolve.resolution
+  | Uncallable
+  | Unexpected of kind
+
+let pp_problem ppf = function
+  | Resolution err -> Resolve.pp_resolution ppf err
+  | Uncallable ->
+    Format.fprintf ppf "This item is not callable"
+  | Unexpected Prim -> ()
+  | Unexpected kind ->
+    Format.fprintf ppf "internal error, unexpected %a"
+      Sexp.pp (sexp_of_kind kind)
+
+
+let unresolved name problem =
+  let msg =
+    Format.asprintf "Failed to find a definition for %a.@ %a@."
+      KB.Name.pp name
+      pp_problem problem in
+  KB.fail (Unresolved_definition msg)
 
 let resolve prog item name =
   match Resolve.semantics prog item name () with
   | None -> !!None
-  | Some (Error problem) -> unresolved problem
+  | Some (Error problem) -> unresolved name (Resolution problem)
   | Some (Ok (fn,_)) -> !!(Some fn)
 
 let check_arg _ _ = true
@@ -78,9 +111,13 @@ let check_arg _ _ = true
 let is_external def =
   not @@ Set.is_empty (Attribute.Set.get External.t (Def.attributes def))
 
+type body = (Theory.Target.t -> (Theory.Label.t -> Theory.Value.Top.t list -> unit Theory.eff) KB.t)
+
 type info = {
   types : (Theory.Target.t -> Type.signature);
   docs : string;
+  body : body option;
+  kind : [`meth | `defn]
 }
 
 let library = Hashtbl.create (module KB.Name)
@@ -118,22 +155,56 @@ let definition =
     ~equal:Theory.Label.equal
     ~inspect:Theory.Label.sexp_of_t
 
+let dummy_type _ = Type.{
+    args = [];
+    rest = Some any;
+    ret = any;
+  }
+
+
 let declare
-    ?(types=fun _ -> Type.{
-        args = [];
-        rest = Some any;
-        ret = any;
-      })
-    ?(docs="undocumented") ?package name =
+    ?(types=dummy_type)
+    ?(docs="undocumented") ?package ?body name =
   let name = KB.Name.create ?package name in
   if Hashtbl.mem library name
-  then invalid_argf "A primitive `%s' already exists, please \
-                     choose a different name for your primitive"
+  then invalid_argf "A semantic primitive `%s' already exists, \
+                     please choose a different name for your \
+                     primitive"
       (KB.Name.show name) ();
   Hashtbl.add_exn library name {
     docs;
-    types
+    types;
+    body;
+    kind = `defn;
   }
+
+let signal ?params ?(docs="undocumented") property reflect =
+  let name = KB.Slot.name property in
+  if Hashtbl.mem library name
+  then invalid_argf "The signal `%s' is already reflected."
+      (KB.Name.show name) ();
+  let app ts t = List.(ts >>| fun typ -> typ t) in
+  let types t = match params with
+    | None -> dummy_type t
+    | Some (`All typ) -> Type.signature ~rest:(typ t) [] Any
+    | Some (`Tuple ts) -> Type.signature (app ts t) Any
+    | Some (`Gen (ts,r)) ->
+      Type.signature ~rest:(r t) (app ts t) Any in
+  KB.observe property @@begin fun lbl x ->
+    let* args = reflect lbl x in
+    KB.sequence [
+      KB.provide Property.name lbl (Some name);
+      KB.provide Property.args lbl (Some args);
+    ] >>= fun () ->
+    KB.collect Theory.Semantics.slot lbl >>| ignore
+  end;
+  Hashtbl.add_exn library name {
+    docs;
+    types;
+    body=None;
+    kind=`meth;
+  }
+
 
 
 let sort = Theory.Value.sort
@@ -162,9 +233,6 @@ let static_slot =
   KB.Domain.optional "bitvec"
     ~equal:Bitvec.equal
     ~inspect:(fun x -> Sexp.Atom (Bitvec.to_string x))
-
-
-
 
 let update_value r f =
   let v = KB.Value.get Theory.Semantics.value r in
@@ -200,22 +268,36 @@ let sym str =
   let v = update_value empty @@ fun v ->
     KB.Value.put symbol v (Some str) in
   match str with
-  | "nil" -> Meta.return@@set_static v Bitvec.zero
+  | "t" -> KB.return@@set_static v Bitvec.one
+  | "nil" -> KB.return@@set_static v Bitvec.zero
   | name ->
-    Meta.lift @@
     intern name >>|
     set_static v
+
+module Value = struct
+  type t = value
+  let empty : t  = Theory.Value.Top.empty
+  let custom p x = empty.$[p] <- x
+  let static x = custom static_slot (Some x)
+  let symbol s = custom symbol (Some s)
+  let nil = static Bitvec.zero
+end
+
+module Effect = struct
+  type t = effect
+  let pure x : t = empty.$[Theory.Semantics.value] <- x
+  let return x : t KB.t = KB.return@@pure x
+end
 
 
 let static x =
   KB.Value.get static_slot (res x)
 
 let reify_sym x = match static x with
-  | Some _ -> Meta.return x
+  | Some _ -> KB.return x
   | None -> match KB.Value.get symbol (res x) with
-    | None -> Meta.return x
+    | None -> KB.return x
     | Some name ->
-      Meta.lift @@
       intern name >>|
       set_static x
 
@@ -238,31 +320,28 @@ let lookup_parameter prog v =
   let v = KB.Name.read @@ Theory.Var.name v in
   let name = KB.Name.unqualified v in
   Program.in_package (KB.Name.package v) prog @@ fun prog ->
-  Program.get prog Key.para |>
-  List.find ~f:(fun p ->
-      String.equal (Def.name p) name) |> function
-  | None -> None
-  | Some p -> Some (Def.Para.default p)
+  match Program.get ~name prog Key.para with
+  | p :: _ -> Some (Def.Para.default p)
+  | [] -> None
 
 let is_parameter prog v = Option.is_some (lookup_parameter prog v)
 
 module Env = struct
-  open Meta.State
 
   let lookup v =
     let v = Theory.Var.forget v in
-    Meta.get () >>| fun {binds} ->
+    let+ {binds} = State.get in
     Map.find binds v
 
 
   let set v x =
-    Meta.update @@ fun s -> {
+    State.update @@ fun s -> {
       s with binds = Map.set s.binds
                  (Theory.Var.forget v) x
     }
 
   let del v =
-    Meta.update @@ fun s -> {
+    State.update @@ fun s -> {
       s with binds = Map.remove s.binds (Theory.Var.forget v)
     }
 
@@ -276,15 +355,15 @@ module Env = struct
     Theory.Var.forget@@Theory.Var.define (bits s) (KB.Name.to_string n)
 
   let set_args ws bs =
-    Meta.get () >>= fun s ->
+    let* s = State.get in
     let binds,old =
       List.fold bs ~init:(s.binds,[]) ~f:(fun (s,old) (v,x) ->
           let v = var ws v in
           Map.set s v x,(v,Map.find s v) :: old) in
-    Meta.put {s with binds} >>| fun () ->
+    State.set {s with binds} >>| fun () ->
     List.rev old
 
-  let del_args bs = Meta.update @@ fun s -> {
+  let del_args bs = State.update @@ fun s -> {
       s with binds = List.fold bs ~init:s.binds ~f:(fun s (v,x) ->
       match x with
       | None -> Map.remove s v
@@ -297,8 +376,8 @@ module Scope = struct
 
   let push orig =
     let orig = forget orig in
-    Meta.lift@@Theory.Var.fresh (Theory.Var.sort orig) >>= fun v ->
-    Meta.update  (fun s -> {
+    Theory.Var.fresh (Theory.Var.sort orig) >>= fun v ->
+    State.update  (fun s -> {
           s with scope = Map.update s.scope orig ~f:(function
         | None -> [v]
         | Some vs -> v::vs)
@@ -306,41 +385,42 @@ module Scope = struct
     v
 
   let lookup orig =
-    let+ {scope} = Meta.get () in
+    let+ {scope} = State.get in
     match Map.find scope orig with
     | None | Some [] -> None
     | Some (x :: _) -> Some x
 
   let pop orig =
-    Meta.update @@ fun s -> {
+    State.update @@ fun s -> {
       s with scope = Map.change s.scope (forget orig) ~f:(function
         | None | Some [] | Some [_] -> None
         | Some (_::xs) -> Some xs)
     }
 
   let clear =
-    let* s = Meta.get () in
-    let+ () = Meta.put {
+    let* s = State.get in
+    let+ () = State.set {
         s with scope = Map.empty (module Theory.Var.Top)
       } in
     s.scope
 
-  let restore scope = Meta.update @@ fun s -> {
+  let restore scope = State.update @@ fun s -> {
       s with scope
     }
 
 end
 
 module Prelude(CT : Theory.Core) = struct
-  let label = Meta.lift (KB.Object.create Theory.Program.cls)
+  let null = KB.Object.null Theory.Program.cls
+  let fresh = KB.Object.create Theory.Program.cls
 
   let rec seq = function
-    | [] -> Meta.lift@@CT.perform Theory.Effect.Sort.bot
+    | [] -> CT.perform Theory.Effect.Sort.bot
     | [x] -> x
     | x :: xs ->
       let* xs = seq xs in
       let* x = x in
-      Meta.lift@@CT.seq (KB.return x) (KB.return xs)
+      CT.seq (KB.return x) (KB.return xs)
 
   let skip = CT.perform Theory.Effect.Sort.bot
   let pass = CT.perform Theory.Effect.Sort.bot
@@ -353,10 +433,10 @@ module Prelude(CT : Theory.Core) = struct
     let s = bits m in
     let m = Bitvec.modulus m in
     let x = Bitvec.(bigint x mod m) in
-    pure @@ Meta.lift (CT.int s x) >>| fun r ->
+    pure @@ CT.int s x >>| fun r ->
     set_static r x
 
-  let (:=) v x = Meta.lift@@CT.set v x
+  let (:=) v x = CT.set v x
 
   let full eff res =
     seq eff >>= fun eff ->
@@ -364,46 +444,29 @@ module Prelude(CT : Theory.Core) = struct
     create eff res
 
   let data xs =
-    label >>= fun lbl ->
     let* data = seq xs in
-    Meta.lift@@CT.blk lbl !data skip
+    CT.blk null !data skip
 
   let ctrl xs =
-    label >>= fun lbl ->
     let* ctrl = seq xs in
-    Meta.lift@@CT.blk lbl pass !ctrl
+    CT.blk null pass !ctrl
 
   let blk lbl xs = seq [
-      Meta.lift@@CT.blk lbl pass skip;
+      CT.blk lbl pass skip;
       seq xs;
     ]
-
-  let cast s x =
-    Meta.lift@@CT.cast (bits s) CT.b0 !x
 
   let nil = !!(Theory.Value.empty Theory.Bool.t)
   let undefined = full [] nil
   let purify eff =
     full [] !!(res eff)
 
-  let unified x y f =
-    Theory.Value.Match.(begin
-        let|() = both
-            Theory.Bitv.refine x
-            Theory.Bitv.refine y @@ fun x y ->
-          let s = Int.max (size x) (size y) in
-          cast s x >>= fun x ->
-          cast s y >>= fun y ->
-          f x y in
-        undefined
-      end)
-
   let coerce_bits s x f =
     let open Theory.Value.Match in
     let| () = can Theory.Bitv.refine x @@ fun x ->
-      Meta.lift@@CT.cast s CT.b0 !x >>= f in
+      CT.cast s CT.b0 !x >>= f in
     let| () = can Theory.Bool.refine x @@ fun cnd ->
-      Meta.lift@@CT.ite !cnd
+      CT.ite !cnd
         (CT.int s Bitvec.one)
         (CT.int s Bitvec.zero) >>= fun x ->
       f x in
@@ -413,7 +476,7 @@ module Prelude(CT : Theory.Core) = struct
     let open Theory.Value.Match in
     let| () = can Theory.Bool.refine x f in
     let| () = can Theory.Bitv.refine x @@ fun x ->
-      Meta.lift@@CT.non_zero !x >>= fun x -> f x in
+      CT.non_zero !x >>= fun x -> f x in
     undefined
 
   let is_static eff = Option.is_some (static eff)
@@ -432,14 +495,13 @@ module Prelude(CT : Theory.Core) = struct
     let word = Theory.Target.bits target in
     let {prog; places} = program in
     let var ?t n = make_var ?t places target n in
-    let rec eval : ast -> unit Theory.Effect.t Meta.t = function
+    let rec eval : ast -> unit Theory.Effect.t KB.t = function
       | {data=Int {data={exp=x; typ=Type m}}} -> bigint x m
       | {data=Int {data={exp=x}}} -> bigint x word
       | {data=Var {data={exp=n; typ=Type t}}} -> lookup@@var ~t n
       | {data=Var {data={exp=n}}} -> lookup@@var n
       | {data=Sym {data=s}} -> sym (KB.Name.unqualified s)
       | {data=Ite (cnd,yes,nay)} -> ite cnd yes nay
-      | {data=Let ({data={exp=n; typ=Type t}},x,y)} -> let_ ~t n x y
       | {data=Let ({data={exp=n}},x,y)} -> let_ n x y
       | {data=App (Dynamic name,args)} -> app name args
       | {data=Seq xs} -> seq_ xs
@@ -458,15 +520,15 @@ module Prelude(CT : Theory.Core) = struct
         else eval yes
       | None ->
         coerce_bool (res cnd) @@ fun cres ->
-        Meta.lift@@Theory.Var.fresh Theory.Bool.t >>= fun c ->
+        Theory.Var.fresh Theory.Bool.t >>= fun c ->
         let* yes = eval yes in
         let* nay = eval nay in
         full [
           !!cnd;
           data [c := !cres];
-          Meta.lift@@CT.branch (CT.var c) !yes !nay;
+          CT.branch (CT.var c) !yes !nay;
         ] @@
-        Meta.lift@@CT.ite (CT.var c) !(res yes) !(res nay)
+        CT.ite (CT.var c) !(res yes) !(res nay)
     and rep cnd body =
       let* r = eval cnd in
       match static r with
@@ -478,16 +540,23 @@ module Prelude(CT : Theory.Core) = struct
           rep cnd body
       | None ->
         let* body = eval body in
-        let* head = label and* loop = label and* tail = label in
+        let* head = fresh and* loop = fresh and* tail = fresh in
         coerce_bool (res r) @@ fun cres ->
         full [
-          blk head [ctrl [Meta.lift@@CT.goto tail]];
+          blk head [ctrl [CT.goto tail]];
           blk loop [!!body];
           blk tail [!!r; ctrl [
-              Meta.lift@@CT.branch !cres (CT.goto head) skip
+              CT.branch !cres (CT.goto head) skip
             ]]
         ] !!cres
     and call ?(toplevel=false) name xs =
+      match Map.find program.names name with
+      | None when toplevel -> !!Insn.empty
+      | Some Prim | None -> call_primitive name xs
+      | Some Defn -> call_defn name xs
+      | Some Meth -> call_meth name xs
+      | Some Data -> unresolved name Uncallable
+    and call_defn name xs =
       match Resolve.defun check_arg prog Key.func name xs with
       | Some (Ok (fn,_)) when is_external fn ->
         sym (Def.name fn) >>= fun dst ->
@@ -499,29 +568,41 @@ module Prelude(CT : Theory.Core) = struct
         Scope.restore scope >>= fun () ->
         Env.del_args bs >>= fun () ->
         !!eff
-      | Some (Error problem) -> unresolved problem
-      | None when toplevel -> !!Insn.empty
-      | None ->
-        match Resolve.semantics prog Key.semantics name () with
-        | Some Ok (sema,()) ->
-          Meta.lift@@
-          Def.Sema.apply sema defn xs
-        | Some (Error problem) -> unresolved problem
-        | None -> fail (Unresolved_definition (KB.Name.show name))
+      | Some (Error problem) ->
+        unresolved name (Resolution problem)
+      | None -> unresolved name (Unexpected Defn)
+    and call_meth name xs =
+      match Resolve.meth check_arg prog Key.meth name xs with
+      | Some (Error problem) -> unresolved name (Resolution problem)
+      | Some (Ok mets) ->
+        KB.List.fold mets ~init:empty ~f:(fun effects (meth,bs) ->
+            Env.set_args word bs >>= fun bs ->
+            Scope.clear >>= fun scope ->
+            eval (Def.Meth.body meth) >>= fun eff ->
+            Scope.restore scope >>= fun () ->
+            Env.del_args bs >>| fun () ->
+            KB.Value.merge effects eff)
+      | None -> unresolved name (Unexpected Meth)
+    and call_primitive name xs =
+      match Resolve.semantics prog Key.semantics name () with
+      | Some Ok (sema,()) ->
+        Def.Sema.apply sema defn xs >>= reify_sym
+      | Some (Error problem) -> unresolved name (Resolution problem)
+      | None -> unresolved name (Unexpected Prim)
     and app name xs =
       map xs >>= fun (aeff,xs) ->
       call name xs >>= fun peff ->
       full [!!aeff; !!peff] !!(res peff)
     and map args =
       seq [] >>= fun eff ->
-      Meta.List.fold args ~init:(eff,[]) ~f:(fun (eff,args) arg ->
+      KB.List.fold args ~init:(eff,[]) ~f:(fun (eff,args) arg ->
           let* eff' = eval arg in
           let+ eff = seq [!!eff; !!eff'] in
           (eff,forget (res eff')::args)) >>| fun (eff,args) ->
       eff, List.rev args
     and seq_ xs =
       pure nil >>= fun init ->
-      Meta.List.fold ~init xs ~f:(fun eff x  ->
+      KB.List.fold ~init xs ~f:(fun eff x  ->
           let* eff' = eval x in
           full [!!eff; !!eff'] !!(res eff'))
     and msg fmt args =
@@ -535,7 +616,7 @@ module Prelude(CT : Theory.Core) = struct
               | None -> Format.printf "@[<hv>%a@]" KB.Value.pp v);
       Format.fprintf ppf "@\n";
       !!aeff
-    and err msg = fail (User_error msg)
+    and err msg = KB.fail (User_error msg)
     and lookup v =
       Scope.lookup v >>= function
       | Some v -> lookup v
@@ -544,14 +625,15 @@ module Prelude(CT : Theory.Core) = struct
         | Some v -> pure !!v
         | None -> match lookup_parameter prog v with
           | Some def -> eval def >>= assign target v
-          | None -> pure@@Meta.lift@@CT.var v
+          | None -> pure@@CT.var v
     and set_ v x =
       Scope.lookup v >>= function
       | Some v -> eval x >>= assign target ~local:true v
       | None -> eval x >>= assign target v
-    and let_ ?(t=word) v x b =
+    and let_ v x b =
       let* xeff = eval x in
-      let orig = Theory.Var.define (bits t) (KB.Name.to_string v) in
+      let s = Theory.Value.sort (res xeff) in
+      let orig = Theory.Var.define s (KB.Name.to_string v) in
       if is_parameter prog orig
       then
         Env.set orig (res xeff) >>= fun () ->
@@ -568,7 +650,7 @@ module Prelude(CT : Theory.Core) = struct
           !!beff;
         ] !!(res beff)
     and prim ?(package="core") name args =
-      call (KB.Name.read ~package name) args >>= reify_sym in
+      call (KB.Name.read ~package name) args in
     match args with
     | Some args ->
       call ~toplevel:true name args
@@ -605,6 +687,12 @@ module Unit = struct
 end
 
 type KB.conflict += Illtyped_program of Program.Type.error list
+type KB.conflict += Failed_primitive of KB.Name.t * string
+type KB.conflict += Primitive_failed of string
+
+let failp fmt =
+  Format.kasprintf (fun msg ->
+      KB.fail (Primitive_failed msg)) fmt
 
 let primitive name defn args =
   let open KB.Syntax in
@@ -614,25 +702,64 @@ let primitive name defn args =
     KB.provide definition obj (Some defn);
     KB.provide Property.args obj (Some args);
   ] >>= fun () ->
-  KB.collect Theory.Semantics.slot obj
+  KB.catch (KB.collect Theory.Semantics.slot obj)
+    (function Primitive_failed msg ->
+       KB.fail (Failed_primitive (name,msg))
+            | other -> KB.fail other)
 
 let link_library target prog =
-  Hashtbl.fold library ~f:(fun ~key:name ~data:{types; docs} prog ->
+  let open KB.Let in
+  Hashtbl.to_alist library |>
+  KB.List.fold ~init:prog ~f:(fun prog (name,{types; docs; body; kind}) ->
       let types = types target in
-      Program.add prog Program.Items.semantics @@
-      Def.Sema.create ~docs ~types name (primitive name))
-    ~init:prog
+      match kind with
+      | `meth ->
+        KB.return @@
+        Program.add prog Program.Items.signal @@
+        Def.Signal.create ~types ~docs (KB.Name.show name)
+      | `defn ->
+        match body with
+        | None ->
+          KB.return @@
+          Program.add prog Program.Items.semantics @@
+          Def.Sema.create ~docs ~types name (primitive name)
+        | Some body ->
+          let+ fn = body target in
+          Program.add prog Program.Items.semantics @@
+          Def.Sema.create ~docs ~types name fn)
+
+
+let collect_names kind key prog =
+  Program.fold prog key ~f:(fun ~package def names ->
+      if Program.is_applicable prog def
+      then
+        let name = Def.name def in
+        Map.set names (KB.Name.create ~package name) kind
+      else names)
+    ~init:(Map.empty (module KB.Name))
+
+let merge_names names =
+  List.reduce names ~f:(Map.merge_skewed
+                          ~combine:(fun ~key:_ _ v -> v)) |>
+  function None -> Map.empty (module KB.Name)
+         | Some r -> r
+
 
 let obtain_typed_program unit =
   let open KB.Syntax in
+  let open KB.Let in
   KB.collect Theory.Unit.source unit >>= fun src ->
   KB.collect Theory.Unit.target unit >>= fun target ->
   match KB.Value.get typed src with
   | Some prog -> !!prog
   | None ->
-    let prog =
-      link_library target @@
-      Program.with_places (KB.Value.get program src) target in
+    let* context = unit-->context in
+    let input =
+      let init = KB.Value.get program src in
+      Program.with_context init @@
+      Context.merge (Program.context init) context in
+    let* prog =
+      link_library target @@ Program.with_places input target in
     let tprog = Program.Type.infer prog in
     let prog = Program.Type.program tprog in
     let places = Program.fold prog Key.place
@@ -640,13 +767,26 @@ let obtain_typed_program unit =
             let name = KB.Name.create ~package (Def.name place) in
             Map.set places name (Def.Place.location place))
         ~init:(Map.empty (module KB.Name)) in
-    let program = {prog; places} in
+    let names = merge_names  [
+        collect_names Defn Key.func prog;
+        collect_names Prim Key.semantics prog;
+        collect_names Data Key.para prog;
+        collect_names Data Key.const prog;
+        collect_names Meth Key.meth prog;
+      ] in
+    let program = {prog; places; names} in
     match Program.Type.errors tprog with
     | [] ->
       let src = KB.Value.put typed src (Some program) in
       KB.provide Theory.Unit.source unit src >>| fun () ->
       program
     | errs -> KB.fail (Illtyped_program errs)
+
+
+let typed_program unit =
+  let open KB.Syntax in
+  obtain_typed_program unit >>| fun {prog} -> prog
+
 
 let provide_semantics ?(stdout=Format.std_formatter) () =
   let open KB.Syntax in
@@ -661,27 +801,25 @@ let provide_semantics ?(stdout=Format.std_formatter) () =
       provide Theory.Semantics.slot |>
       comment "reifies Primus Lisp definitions"
     end);
-  let (>>=?) x f = x >>= function
-    | None -> !!Insn.empty
-    | Some x -> f x in
+  let require p k = if p then k () else !!Insn.empty in
   KB.promise Theory.Semantics.slot @@ fun obj ->
-  KB.collect Theory.Label.unit obj >>=? fun unit ->
-  KB.collect Property.name obj >>=? fun name ->
-  KB.collect Property.args obj >>= fun args ->
-  obtain_typed_program unit >>= fun prog ->
-  KB.collect Theory.Unit.target unit >>= fun target ->
+  let* unit = obj-->?Theory.Label.unit in
+  let* name = obj-->?Property.name in
+  let* prog = obtain_typed_program unit in
+  require (Map.mem prog.names name) @@ fun () ->
+  let* args = obj-->Property.args in
+  let* target = KB.collect Theory.Unit.target unit in
   let bits = Theory.Target.bits target in
-  let module Arith = Bitvec.Make(struct
-      let modulus = Bitvec.modulus bits
-    end) in
-  let meta = Meta.State.{
+  KB.Context.set State.var State.{
       binds = Map.empty (module Theory.Var.Top);
       scope = Map.empty (module Theory.Var.Top);
-      arith = (module Arith);
-    } in
-  Theory.instance () >>= Theory.require >>= fun (module Core) ->
+      arith = (module (Bitvec.Make(struct
+                         let modulus = Bitvec.modulus bits
+                       end)));
+    } >>= fun () ->
+  let* (module Core) = Theory.current in
   let open Prelude(Core) in
-  Meta.run (reify stdout prog obj target name args) meta >>= fun (res,_) ->
+  let* res = reify stdout prog obj target name args in
   KB.collect Disasm_expert.Basic.Insn.slot obj >>| function
   | Some basic when Insn.(res <> empty) ->
     Insn.with_basic res basic
@@ -697,13 +835,17 @@ let provide_attributes () =
   KB.collect Theory.Label.unit this >>=? fun unit ->
   KB.collect Property.name this >>=? fun name ->
   obtain_typed_program unit >>= fun {prog} ->
-  match Resolve.semantics prog Key.func name () with
-  | None -> !!empty
-  | Some (Error problem) ->
-    let msg = Format.asprintf "%a" Resolve.pp_resolution problem in
-    KB.fail (Unresolved_definition msg)
-  | Some (Ok (fn,_)) ->
-    !!(Def.attributes fn)
+  let package = KB.Name.package name
+  and name = KB.Name.unqualified name in
+  Program.in_package package prog @@ fun prog ->
+  Program.get ~name prog Key.func |>
+  List.fold ~init:(Ok empty) ~f:(fun attrs fn ->
+      match attrs with
+      | Error c -> Error c
+      | Ok attrs ->
+        KB.Value.join attrs (Def.attributes fn)) |> function
+  | Ok attrs -> !!attrs
+  | Error conflict -> KB.fail conflict
 
 let enable ?stdout () =
   provide_semantics ?stdout ();
@@ -712,8 +854,7 @@ let enable ?stdout () =
 let static = static_slot
 
 let () = KB.Conflict.register_printer @@ function
-  | Unresolved_definition s ->
-    Option.some @@ sprintf "unresolved defintion %s" s
+  | Unresolved_definition msg -> Option.some @@ sprintf "%s" msg
   | Property.Unequal_arity ->
     Some "The number of arguments is different"
   | User_error msg -> Some ("error: " ^ msg)

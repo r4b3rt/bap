@@ -1,9 +1,9 @@
 let package = "bap"
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Regular.Std
-open Bap_common
+open Bap_common_types
 open Bap_bil
 open Bap_knowledge
 
@@ -125,8 +125,10 @@ module Tid = struct
   let pp ppf tid = Format.fprintf ppf "%s" (to_string tid)
 
   let name t = match get_name t with
-    | None -> to_string t
     | Some name -> sprintf "@%s" name
+    | None -> match get_ivec t with
+      | None -> to_string t
+      | Some ivec -> sprintf "@interrupt:#%d" ivec
 
   let from_string_exn = of_string
   let from_string x = Ok (from_string_exn x)
@@ -305,41 +307,9 @@ end = struct
     paths : path Tid.Table.t;
   } [@@deriving bin_io, fields, sexp]
 
-  let mangle_name addr tid name =
-    match addr with
-    | Some a ->
-      sprintf "%s@%s" name @@
-      Bap_bitvector.string_of_value ~hex:true a
-    | None -> sprintf "%s%%%s" name (Tid.to_string tid)
-
-  let mangle_sub s =
-    let addr = Dict.find s.dict Bap_attributes.address in
-    let name = mangle_name addr s.tid s.self.name in
-    Tid.add_name s.tid s.self.name;
-    Tid.set_name s.tid name;
-    let self = {s.self with name} in
-    {s with self}
-
-  let fix_names news =
-    let is_new sub =
-      not @@ Tid.equal sub.tid (Tid.for_name sub.self.name) in
-    let keep_name tids name tid = Map.set tids ~key:name ~data:tid in
-    let tids = Array.fold news ~init:String.Map.empty ~f:(fun tids sub ->
-        match Map.find tids sub.self.name with
-        | None -> keep_name tids sub.self.name sub.tid
-        | Some _ ->
-          if is_new sub then tids
-          else keep_name tids sub.self.name sub.tid) in
-    if Array.length news = Map.length tids then news
-    else
-      Array.map news ~f:(fun sub ->
-          let tid' = Map.find_exn tids sub.self.name in
-          if Tid.equal tid' sub.tid then sub
-          else mangle_sub sub)
-
   let empty () = {subs = [| |] ;  paths = Tid.Table.create () }
 
-  let update p subs = { p with subs = fix_names subs }
+  let update p subs = { p with subs }
 
   let compare x y =
     let compare x y = [%compare:sub term array] x y in
@@ -543,7 +513,7 @@ module Label = struct
   let direct x = Direct x
   let indirect x = Indirect x
   let create () = direct (Tid.create ())
-  let change ?(direct=ident) ?(indirect=ident) label =
+  let change ?(direct=Fn.id) ?(indirect=Fn.id) label =
     match label with
     | Direct x -> Direct (direct x)
     | Indirect x -> Indirect (indirect x)
@@ -843,7 +813,7 @@ module Ir_phi = struct
         Set.union vars (Exp.free_vars e))
 
   let pp_self ppf {Phi.var; map} =
-    Format.fprintf ppf "%s@ :=@ phi(%s)"
+    Format.fprintf ppf "%s@ <-@ phi(%s)"
       (Theory.Var.name var)
       (String.concat ~sep:", " @@
        List.map ~f:(fun (id,exp) ->
@@ -852,7 +822,7 @@ module Ir_phi = struct
          (Map.to_alist map))
 
   let pp_self_slots ds ppf {Phi.var; map} =
-    Format.fprintf ppf "%s@ :=@ phi(%s)"
+    Format.fprintf ppf "%s@ <-@ phi(%s)"
       (Theory.Var.name var)
       (String.concat ~sep:", " @@
        List.map ~f:(fun (id,exp) ->
@@ -1180,6 +1150,18 @@ module Term = struct
 
   let length t p = Array.length (t.get p.self)
 
+  module KB = struct
+    open KB.Syntax
+
+    let apply f t p =
+      t.get p.self |> Array.to_sequence |> f >>| fun elems ->
+      {p with self = t.set p.self @@ Seq.to_array elems}
+
+    let map t p ~f : 'a term knowledge = apply (KB.Seq.map ~f) t p
+    let filter_map t p ~f : 'a term knowledge = apply (KB.Seq.filter_map ~f) t p
+    let filter t p ~f : 'a term knowledge = apply (KB.Seq.filter ~f) t p
+  end
+
   let origin = Bap_value.Tag.register (module Tid)
       ~package
       ~public:true
@@ -1326,13 +1308,13 @@ module Term = struct
   type 'a map = 'a term -> 'a term
 
   let map_term (type t) (cls : (_,t) cls)
-      ?(program : program map = ident)
-      ?(sub : sub map = ident)
-      ?(arg : arg map = ident)
-      ?(blk : blk map = ident)
-      ?(phi : phi map = ident)
-      ?(def : def map = ident)
-      ?(jmp : jmp map = ident)
+      ?(program : program map = Fn.id)
+      ?(sub : sub map = Fn.id)
+      ?(arg : arg map = Fn.id)
+      ?(blk : blk map = Fn.id)
+      ?(phi : phi map = Fn.id)
+      ?(def : def map = Fn.id)
+      ?(jmp : jmp map = Fn.id)
       (t : t term) : t term = match cls.typ with
     | Nil -> assert false
     | Top -> program t
@@ -1662,7 +1644,7 @@ module Ir_blk = struct
     let (++) = Set.union and (--) = Set.diff in
     let init = Bap_var.Set.empty,Bap_var.Set.empty in
     fst @@ Seq.fold (elts blk) ~init ~f:(fun (vars,kill) -> function
-        | `Phi phi -> vars, Set.add kill (Ir_phi.lhs phi)
+        | `Phi _ -> vars, kill
         | `Def def ->
           Ir_def.free_vars def -- kill ++ vars,
           Set.add kill (Ir_def.lhs def)
@@ -1685,25 +1667,28 @@ module Ir_blk = struct
     Tid.(dominator = id) ||
     Term.(after def_t b dominator |> Seq.exists ~f:(fun x -> Tid.(x.tid = id)))
 
-  let pp_sep xs ys ppf =
+  let pp_sep xs ys zs ppf =
     if Array.length xs <> 0 &&
-       Array.length ys <> 0
+       Array.length ys <> 0 ||
+       Array.length xs <> 0 &&
+       Array.length ys = 0 &&
+       Array.length zs <> 0
     then Format.pp_print_cut ppf ()
 
   let pp_self ppf self =
     Format.fprintf ppf "%a%t%a%t%a"
       (Array.pp Ir_phi.pp) self.phis
-      (pp_sep self.phis self.defs)
+      (pp_sep self.phis self.defs self.jmps)
       (Array.pp Ir_def.pp) self.defs
-      (pp_sep self.defs self.jmps)
+      (pp_sep self.defs self.jmps [||])
       (Array.pp Ir_jmp.pp) self.jmps
 
   let pp_self_slots ds ppf self =
     Format.fprintf ppf "%a%t%a%t%a"
       (Array.pp (Ir_phi.pp_slots ds)) self.phis
-      (pp_sep self.phis self.defs)
+      (pp_sep self.phis self.defs self.jmps)
       (Array.pp (Ir_def.pp_slots ds)) self.defs
-      (pp_sep self.defs self.jmps)
+      (pp_sep self.defs self.jmps [||])
       (Array.pp (Ir_jmp.pp_slots ds)) self.jmps
 
   let box ppf = Format.pp_open_vbox ppf 0
@@ -1728,14 +1713,19 @@ end
 module Ir_sub = struct
   type t = sub term
 
-  let new_empty ?(tid=Tid.create ()) ?name () : t =
-    let name = match name with
+  let make_name ?name tid =
+    match name with
+    | Some name -> name
+    | None -> match Tid.get_name tid with
       | Some name -> name
-      | None -> match Tid.get_name tid with
+      | None -> match Tid.get_ivec tid with
         | None -> Tid.to_string tid
-        | Some name -> name in
+        | Some ivec ->
+          Format.asprintf "interrupt:#%d" ivec
+
+  let new_empty ?(tid=Tid.create ()) ?name () : t =
     make_term tid {
-      name;
+      name = make_name ?name tid;
       args = [| |] ;
       blks = [| |] ;
     }
@@ -1843,6 +1833,13 @@ module Ir_sub = struct
       ~name:"entry-point"
       ~uuid:"d1eaff96-4ed4-4405-9305-63508440ccc1"
 
+  let intrinsic = Bap_value.Tag.register (module Unit)
+      ~package
+      ~public:true
+      ~desc:"the subroutine is an intrinsic or special instruction"
+      ~name:"intrinsic"
+      ~uuid:"68be4fa5-f8f4-4219-b89c-42718c59f09b"
+
   module Builder = struct
     type t =
       tid option * arg term vector * blk term vector * string option
@@ -1862,9 +1859,7 @@ module Ir_sub = struct
         | None -> Tid.create () in
       let args = Vec.to_array args in
       let blks = Vec.to_array blks in
-      let name = match name with
-        | Some name -> name
-        | None -> Format.asprintf "sub_%a" Tid.pp tid in
+      let name = make_name ?name tid in
       make_term tid {name; args; blks}
   end
 

@@ -15,7 +15,7 @@ $(b,bap-plugin-llvm)(1)
 
 open Bap_main
 open Bap_knowledge
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_core_theory
 
@@ -125,6 +125,7 @@ end
 let plt_agent = Knowledge.Agent.register
     ~package:"bap" "plt-symbolizer"
     ~desc:"extracts symbols from external relocations"
+    ~reliability:Knowledge.Agent.reliable
 
 open KB.Syntax
 
@@ -162,12 +163,15 @@ let plt_size label =
   List.find_map plt_sizes ~f:(fun (p,s) ->
       Option.some_if (Theory.Target.belongs p t) s)
 
+let is_intrinsic =
+  String.is_prefix ~prefix:"intrinsic:"
+
 let demangle s = match String.chop_suffix ~suffix:":external" s with
   | None -> s
   | Some s -> s
 
 let extract_external stmt = match Bil.(decode call stmt) with
-  | Some dst -> Some (Name (demangle dst))
+  | Some dst when not (is_intrinsic dst) -> Some (Name (demangle dst))
   | _ -> None
 
 
@@ -199,32 +203,27 @@ let resolve_stubs () =
   KB.collect References.slot unit >>= fun refs ->
   KB.collect Theory.Label.addr label >>=? fun addr ->
   KB.collect (Value.Tag.slot Sub.stub) label >>= fun is_stub ->
-  if not (Option.is_some is_stub) then KB.return None
-  else match References.lookup refs addr with
-    | Some (Name s) -> KB.return (Some s)
-    | _ ->
-      plt_size label >>=? fun size ->
-      collect_insns size addr >>| fun bil ->
-      find_references bil |>
-      List.find_map ~f:(function
-          | Name s -> Some s
-          | Addr dst -> match References.lookup refs dst with
-            | Some (Name s) -> Some s
-            | _ -> None)
-
-let label_for_ref = function
-  | Name s -> Theory.Label.for_name s
-  | Addr x -> Theory.Label.for_addr x
+  KB.guard (Option.is_some is_stub) >>= fun () ->
+  match References.lookup refs addr with
+  | Some (Name s) -> KB.return (Some s)
+  | _ ->
+    plt_size label >>=? fun size ->
+    collect_insns size addr >>| fun bil ->
+    find_references bil |>
+    List.find_map ~f:(function
+        | Name s -> Some s
+        | Addr dst -> match References.lookup refs dst with
+          | Some (Name s) -> Some s
+          | _ -> None)
 
 let mark_mips_stubs_as_functions () : unit =
   KB.promise Theory.Label.is_subroutine @@ fun label ->
-  KB.collect Theory.Label.addr label >>=? fun addr ->
-  KB.collect Theory.Label.unit label >>=? fun unit ->
-  KB.collect References.slot unit >>= fun refs ->
-  KB.collect Theory.Unit.target unit >>| fun target ->
-  let is_entry = (Theory.Target.matches target "mips") &&
-                 Option.is_some (References.lookup refs addr) in
-  Option.some_if is_entry true
+  let* unit = label-->?Theory.Label.unit in
+  let* target = unit-->Theory.Unit.target in
+  KB.guard (Theory.Target.matches target "mips-family") >>= fun () ->
+  let* addr = label-->?Theory.Label.addr in
+  KB.collect References.slot unit >>| fun refs ->
+  Option.(some_if (is_some (References.lookup refs addr))) true
 
 let () = Extension.declare ~doc @@ fun _ctxt ->
   References.prepare ();

@@ -1,10 +1,12 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Bap_c.Std
 
 open Format
 open Bap_primus_types
+
+include Self()
 
 module Primus = struct
   module Env = Bap_primus_env
@@ -20,7 +22,7 @@ open Primus
 
 module Time = struct
   include Int
-  let clocks = ident
+  let clocks = Fn.id
   let of_clocks = of_int
 end
 
@@ -326,8 +328,8 @@ let cfi_violation_handler = "__primus_cfi_violation_handler"
 
 module Make (Machine : Machine) = struct
   open Machine.Syntax
+  open Machine.Let
 
-  module Eval = Eval.Make(Machine)
   module Memory = Primus.Memory.Make(Machine)
   module Env = Primus.Env.Make(Machine)
   module Code = Linker.Make(Machine)
@@ -615,6 +617,57 @@ module Make (Machine : Machine) = struct
     | LittleEndian -> do_store a x s LOW HIGH
     | BigEndian    -> do_store a x s HIGH LOW
 
+
+  let infer x = match Type.infer x with
+    | Ok Imm m -> Machine.return m
+    | _ ->
+      failf "ill-typed expression, expected a bitvector: %a"
+        Exp.pps x ()
+
+
+  let rec assign rhs x = match (rhs : exp) with
+    | Var v -> set v x
+    | Ite (c,yes,nay) ->
+      let* c = exp c in
+      if Value.is_one c then assign yes x else assign nay x
+    | Cast (LOW,part,v) ->
+      let* width = infer v in
+      let* y = exp v in
+      let* hi = cast HIGH (width-part) y in
+      let* x = concat hi x in
+      assign v x
+    | Cast (HIGH,part,v) ->
+      let* width = infer v in
+      let* y = exp v in
+      let* lo = cast LOW (width-part) y in
+      let* x = concat x lo in
+      assign v x
+    | Cast (_widen,_,v) ->
+      let* part = infer v in
+      let* x = cast LOW part x in
+      assign v x
+    | Extract (hi,lo,v) ->
+      let* size = infer v in
+      let* y = exp v in
+      let* hi = cast HIGH (size-hi-1) y in
+      let* lo = cast LOW lo y in
+      let* x = concat hi x in
+      let* x = concat x lo in
+      assign v x
+    | Load (mem,addr,endian,size) ->
+      exp mem >>= fun _ ->
+      exp addr >>= fun addr ->
+      store addr x endian size
+    | Concat (high,rest) ->
+      let* size = infer high in
+      let* hix = cast HIGH size x in
+      let* lox = cast LOW (Value.bitwidth x - size) x in
+      Machine.sequence [
+        assign high hix;
+        assign rest lox;
+      ]
+    | exp -> failf "not an lvalue: %a" Exp.pps exp ()
+
   let update_pc t =
     match Term.get_attr t address with
     | None -> Machine.return ()
@@ -862,41 +915,57 @@ module LinkBinaryProgram(Machine : Machine) = struct
   let is_linked name t = [
     Linker.is_linked (`tid (Term.tid t));
     Linker.is_linked (`symbol (name t));
-  ] |> Machine.List.all >>| List.exists ~f:ident >>= function
+  ] |> Machine.List.all >>| List.exists ~f:Fn.id >>= function
     | true -> Machine.return true
     | false -> match Term.get_attr t address with
       | None -> Machine.return false
       | Some x -> Linker.is_linked (`addr x)
 
+  let collect name t tids =
+    is_linked name t >>= function
+    | true -> tids >>| fun tids -> Set.add tids @@ Term.tid t
+    | false -> tids
+
+  let collector = object
+    inherit [Tid.Set.t Machine.t] Term.visitor
+    method! enter_blk = collect Term.name
+    method! enter_sub = collect Sub.name
+  end
 
   let link name code t m =
-    m >>= fun () -> is_linked name t >>= function
-    | true -> Machine.return ()
-    | false ->
-      Linker.link
-        ~name:(name t)
-        ~tid:(Term.tid t)
-        ?addr:(Term.get_attr t address)
-        code
+    m >>= fun () -> Linker.link
+      ~name:(name t)
+      ~tid:(Term.tid t)
+      ?addr:(Term.get_attr t address)
+      code
 
-  let linker = object
+  let linker linked = object
     inherit [unit Machine.t] Term.visitor
-    method! enter_blk t =
-      let module Code(Machine : Machine) = struct
-        module Interp = Make(Machine)
-        let exec = Interp.blk t
-      end in
-      link Term.name (module Code) t
-    method! enter_sub t =
-      let module Code(Machine : Machine) = struct
-        module Interp = Make(Machine)
-        let exec = Interp.sub t
-      end in
-      link Sub.name (module Code) t
+    method! enter_blk t m =
+      if not @@ Set.mem linked @@ Term.tid t then
+        let module Code(Machine : Machine) = struct
+          module Interp = Make(Machine)
+          let exec = Interp.blk t
+        end in
+        link Term.name (module Code) t m
+      else m
+    method! enter_sub t m =
+      if not @@ Set.mem linked @@ Term.tid t then
+        let module Code(Machine : Machine) = struct
+          module Interp = Make(Machine)
+          let exec = Interp.sub t
+        end in
+        info "Linking subroutine %s%!" @@ Sub.name t;
+        link Sub.name (module Code) t m
+      else m
   end
 
 
   let init () =
     Machine.get () >>= fun proj ->
-    linker#run (Project.program proj) (Machine.return ())
+    let prog = Project.program proj in
+    info "Linking binary program%!";
+    collector#run prog !!Tid.Set.empty >>= fun linked ->
+    (linker linked)#run prog !!() >>| fun () ->
+    info "Finished linking binary program%!"
 end

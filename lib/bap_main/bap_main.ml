@@ -1,6 +1,8 @@
 (* Base kills exn, so we have to do it before opening *)
 type error = exn = ..
 
+[@@@warning "-D"]
+
 open Base
 open Stdio
 open Bap_future.Std
@@ -873,8 +875,7 @@ end = struct
 
 
   let update_from_bundle info plugin =
-    let b = Plugin.bundle plugin in
-    let {Manifest.tags; cons; desc} = Bundle.manifest b in
+    let {Manifest.tags; cons; desc} = Plugin.manifest plugin in
     match info with
     | None -> {docs = desc; tags; cons}
     | Some info -> {
@@ -976,9 +977,25 @@ end = struct
   let describe man =
     plugin_page := man @ !plugin_page
 
-  let (>>>) t1 t2 = Term.(const (fun t1 t2 -> match t1 with
-      | Error _ as err -> err
-      | Ok () -> t2) $ t1 $ t2)
+  type term = (unit,error) Result.t Term.t
+
+  (* We can short-circuit the term evaluation, only
+     via Term.(ret,term_result,cli_parse_result), which
+     do not give us an option to pass the error value.
+     Therefore, we had to rely on the ugly hack and keep
+     it in a reference variable.
+  *)
+
+  let term_evaluation_result = ref (Ok ())
+
+  (** [t1 >>> t2] evaluates [t1] and if succeeds evaluates [t2] *)
+  let (>>>) : term -> term -> term = fun t1 t2 ->
+    let f = Term.(const (function
+        | Error _ as err ->
+          term_evaluation_result := err;
+          Error (`Msg "this message is ignored")
+        | Ok () -> Ok (fun x -> x)) $ t1) in
+    Term.(term_result f $ t2)
 
   let concat_plugins () =
     Hashtbl.fold plugin_specs ~init:unit ~f:(fun ~key:_ ~data:t1 t2 ->
@@ -988,11 +1005,8 @@ end = struct
     Caml.Filename.basename (Caml.Sys.executable_name)
 
 
-  let switch_bundle name =
-    let was = main_bundle () in
-    let now = Hashtbl.find_exn plugins name in
-    set_main_bundle (Plugin.bundle now);
-    was
+  let with_context name ~f =
+    Plugin.with_context (Hashtbl.find_exn plugins name) ~f
 
   let try_eval f x = try f x with
     | Invalid_argument s -> Error (Error.Invalid s)
@@ -1015,10 +1029,8 @@ end = struct
                | Ok () ->
                  if not (Set.mem disabled name)
                  then
-                   let old = switch_bundle name in
-                   let res = try_eval code ctxt in
-                   set_main_bundle old;
-                   res
+                   with_context name ~f:(fun () ->
+                       try_eval code ctxt)
                  else Ok ())
 
   let no_plugin_options plugins =
@@ -1073,7 +1085,8 @@ end = struct
         Term.(const serve_manpage $ served $ make_help_option plugin))
 
   let eval ?(man="") ?(name=progname) ?version ?env
-      ?(help=Format.std_formatter) ?default ?command ?err argv =
+      ?(help=Format.std_formatter) ?default ?command
+      ?err:(usr_err=Format.err_formatter) argv =
     let plugin_names = Plugins.list () |> List.map ~f:Plugin.name in
     let disabled_plugins = no_plugin_options plugin_names in
     let plugin_options = concat_plugins () in
@@ -1102,12 +1115,20 @@ end = struct
           then argv
           else Array.of_list (prog::cmd::arg::rest)
         | [_] | [] -> argv in
-    match Term.eval_choice ~catch:false ?env ~help ?err ~argv
-            (main,main_info) commands with
+    let buf = Buffer.create 64 in
+    let err = Format.formatter_of_buffer buf in
+    match Term.eval_choice (main,main_info) commands
+            ?env ~help ~err ~argv ~catch:false with
+    | `Error `Exn -> assert false (*^^^^^^^^^^^ that's why*)
     | `Ok (Ok ()) -> Ok ()
     | `Ok (Error _ as err) -> err
     | `Version | `Help -> Ok ()
-    | `Error _ -> Error Error.Configuration
+    | `Error (`Parse|`Term) -> match !term_evaluation_result with
+      | Ok () ->
+        Format.pp_print_flush err ();
+        Format.fprintf usr_err "%s@." (Buffer.contents buf);
+        Error Error.Configuration
+      | Error _ as err -> err
 end
 
 module Extension = struct

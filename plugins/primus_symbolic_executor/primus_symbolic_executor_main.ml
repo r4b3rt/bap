@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Bap_primus.Std
@@ -335,7 +335,7 @@ end = struct
 
   module Value = struct
     type t = value
-    let to_formula = ident
+    let to_formula = Fn.id
     let to_bigint x =
       let s = Expr.to_string x in
       let len = String.length s in
@@ -1026,7 +1026,9 @@ module Primitives(Machine : Primus.Machine.S) = struct
     ]
 end
 
-let () = Extension.declare  @@ fun ctxt ->
+let () = Extension.declare
+    ~doc:"provides a Primus symbolic executor"
+    ~provides:["primus"; "symbolic-executor"] @@ fun ctxt ->
   let open Extension.Syntax in
   SMT.set_timeout (ctxt-->timeout);
   Primus.Components.register_generic "symbolic-computer"

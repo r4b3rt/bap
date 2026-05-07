@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Bap.Std
 open Format
@@ -205,6 +205,7 @@ let print_command_options () =
 let _cmd =
   let doc =
     "provides options to control cache size and cache garbage collector." in
+  Extension.declare ~doc ~provides:["cache"] (fun _ -> Ok ());
   Extension.Command.(
     begin
       declare ~doc "cache"

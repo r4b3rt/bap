@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Bap.Std
 
@@ -159,7 +159,6 @@ type bits_insn = [
   | `UXTH
   | `REV
   | `REV16
-  | `CLZ
 ] [@@deriving bin_io, compare, sexp, enumerate]
 
 type mult_insn = [

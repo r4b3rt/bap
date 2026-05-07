@@ -1,6 +1,5 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
-open Bap_future.Std
 open Bap_knowledge
 open Bap_core_theory
 open Monads.Std
@@ -12,9 +11,8 @@ include Self()
 
 let package = "bap"
 
-module Optimizer = Theory.Parser.Make(Bil_semantics.Core)
+module Optimizer = Theory.Parser.Make(Theory.Pass.Desugar(Bil_semantics.Core))
 [@@inlined]
-
 
 let provide_bir () =
   KB.Rule.(declare ~package "reify-ir" |>
@@ -23,8 +21,10 @@ let provide_bir () =
            provide Theory.Semantics.slot |>
            comment "reifies IR");
   KB.promise Theory.Semantics.slot @@ fun obj ->
-  KB.collect Theory.Semantics.slot obj >>| fun sema ->
-  match Bil_ir.reify @@  KB.Value.get Bil_ir.slot sema with
+  KB.collect Theory.Semantics.slot obj >>= fun sema ->
+  KB.proceed ~unless:(KB.Value.has Term.slot sema) >>= fun () ->
+  KB.return @@
+  match Bil_ir.reify @@ KB.Value.get Bil_ir.slot sema with
   | [] -> Insn.empty
   | bir -> KB.Value.put Term.slot sema bir
 
@@ -138,9 +138,26 @@ module Relocations = struct
           override_external is_stub name bil
         | None -> bil
 
+  let fixup_agent =
+    KB.Agent.register ~package "bil-fixup-relocator"
+
+  let resolve_external (k,n) =
+    KB.Object.scoped Theory.Program.cls @@ fun lbl ->
+    KB.suggest fixup_agent Theory.Label.possible_name lbl (Some n) >>= fun () ->
+    KB.collect Theory.Label.name lbl >>| function
+    | None -> (k,n)
+    | Some n -> (k,n)
+
+  let resolve_externals exts =
+    Map.to_alist exts |>
+    KB.List.map ~f:resolve_external >>|
+    Map.of_alist_exn (module Int64)
+
   let prepare () =
     KB.promise relocations_slot @@ fun unit ->
-    KB.collect Image.Spec.slot unit >>| of_spec
+    let* rels = KB.collect Image.Spec.slot unit >>| of_spec in
+    let+ exts = resolve_externals rels.exts in
+    {rels with exts}
 end
 
 module Brancher = struct
@@ -163,8 +180,7 @@ module Brancher = struct
   let goto dst = ret Theory.Effect.Sort.jump dst
 
   let jmp _ =
-    KB.Object.create Theory.Program.cls >>= fun dst ->
-    ret Theory.Effect.Sort.jump dst
+    ret Theory.Effect.Sort.jump Theory.Label.null
 
   let seq x y =
     x >>= fun x ->
@@ -274,10 +290,8 @@ let lift ~enable_intrinsics:{for_all; for_unk; for_special; predicates}
   else
     let module Target = (val target_of_arch arch) in
     match Target.lift mem insn with
-    | Error _ as err ->
-      if for_unk
-      then Ok (create_intrinsic target mem insn)
-      else err
+    | Error _ as err -> err
+    | Ok [] when for_unk -> Ok (create_intrinsic target mem insn)
     | Ok bil ->
       if for_special && has_special bil
       then Ok (create_intrinsic target mem insn)
@@ -289,21 +303,17 @@ let provide_bil ~enable_intrinsics () =
            require Disasm_expert.Basic.Insn.slot |>
            provide Bil.code |>
            comment "uses legacy lifters to provide BIL code.");
-  let unknown = KB.Domain.empty Bil.domain in
-  let (>>?) x f = x >>= function
-    | None -> KB.return unknown
-    | Some x -> f x in
   let enable_intrinsics = split_specs enable_intrinsics in
   KB.promise Bil.code @@ fun obj ->
-  Knowledge.collect Arch.slot obj >>= fun arch ->
-  Theory.Label.target obj >>= fun target ->
-  Knowledge.collect Memory.slot obj >>? fun mem ->
-  Knowledge.collect Disasm_expert.Basic.Insn.slot obj >>? fun insn ->
+  let* arch = KB.require Arch.slot obj in
+  let* target = Theory.Label.target obj in
+  let* mem = obj-->?Memory.slot in
+  let* insn = obj-->?Disasm_expert.Basic.Insn.slot in
   match lift ~enable_intrinsics target arch mem insn with
   | Error err ->
-    info "BIL: the BIL lifter failed with %a" Error.pp err;
-    !!unknown
-  | Ok [] -> !!unknown
+    warning "BIL: the BIL lifter failed with %a" Error.pp err;
+    KB.return []
+  | Ok [] -> KB.return []
   | Ok bil ->
     Optimizer.run Bil.Theory.parser bil >>= fun sema ->
     let bil = Insn.bil sema in
@@ -318,7 +328,6 @@ let provide_basic () =
   KB.collect Disasm_expert.Basic.Insn.slot obj >>= function
   | None -> !!Theory.Semantics.empty
   | Some insn ->
-    KB.Object.repr Theory.Program.cls obj >>= fun lbl ->
     KB.collect Bil.code obj >>| function
     | [] -> Theory.Semantics.empty
     | bil -> Insn.of_basic ~bil insn
@@ -332,12 +341,12 @@ let provide_lifter ~with_fp () =
     else base_context in
   let is_empty = KB.Domain.is_empty Bil.domain in
   let lifter obj =
-    Theory.Label.target obj >>= fun target ->
-    Theory.instance ~context:(context target) () >>=
-    Theory.require >>= fun (module Core) ->
     KB.collect Bil.code obj >>= fun bil ->
     if is_empty bil then !!Insn.empty
     else
+      Theory.Label.target obj >>= fun target ->
+      Theory.instance ~context:(context target) () >>=
+      Theory.require >>= fun (module Core) ->
       let module Lifter = Theory.Parser.Make(Core) in
       Lifter.run Bil.Theory.parser bil in
   KB.Rule.(declare ~package "bil-semantics" |>

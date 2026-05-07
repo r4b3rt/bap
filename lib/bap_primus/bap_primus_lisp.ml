@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Format
@@ -6,17 +6,20 @@ open Bap_c.Std
 open Bap_primus_types
 open Bap_primus_sexp
 
+include Self()
 
 module Lisp = struct
   module Attribute = Bap_primus_lisp_attribute
   module Attributes = Bap_primus_lisp_attributes
   module Def = Bap_primus_lisp_def
   module Var = Bap_primus_lisp_var
+  module Loc = Bap_primus_lisp_loc
   module Resolve = Bap_primus_lisp_resolve
   module State = Bap_primus_state
+  module Source = Bap_primus_lisp_source
   module Check = Bap_primus_lisp_type.Check
-  module Context = Bap_primus_lisp_context
   module Program = Bap_primus_lisp_program
+  module Context = Bap_primus_lisp_context
   module Type = Bap_primus_lisp_type
 end
 
@@ -264,9 +267,8 @@ module Interpreter(Machine : Machine) = struct
 
   let lookup_parameter prog {data={exp=name}} =
     Lisp.Program.in_package (KB.Name.package name) prog @@ fun prog ->
-    Lisp.Program.get prog para |>
-    List.find ~f:(fun p ->
-        String.equal (Lisp.Def.name p) (KB.Name.unqualified name))
+    Lisp.Program.get ~name:(KB.Name.unqualified name) prog para |>
+    List.hd
 
 
   (* Still an open question. Shall we register an call to an external
@@ -467,6 +469,7 @@ module type Primitives = Lisp.Def.Primitives
 module Primitive = Lisp.Def.Primitive
 type closure = Lisp.Def.closure
 type program = Lisp.Program.t
+type context = Lisp.Context.t
 module Load = Bap_primus_lisp_parse
 module Type = struct
   include Lisp.Program.Type
@@ -680,15 +683,7 @@ module Make(Machine : Machine) = struct
 
         let eval_ret r = match ret with
           | None -> Machine.return ()
-          | Some v -> match Arg.rhs v with
-            | Bil.Var reg -> Eval.set reg r
-            | Bil.(Cast (LOW, rsize, Var reg)) ->
-              let vsize = size_of_reg reg in
-              Eval.get reg >>= fun lhs ->
-              Eval.extract ~hi:(vsize-1) ~lo:rsize lhs >>= fun high ->
-              Eval.concat high r >>= fun r ->
-              Eval.set reg r
-            | e -> failf "an unsupported return semantics: %a" Exp.pps e ()
+          | Some v -> Eval.assign (Arg.rhs v) r
 
         let exec =
           eval_args >>= fun bs ->
@@ -705,6 +700,7 @@ module Make(Machine : Machine) = struct
           Interp.eval_advices Advice.After r fullname args >>= fun r ->
           eval_ret r
       end in
+      info "linking lisp def %s" name;
       Linker.link ?addr ?tid ~name (module Code)
 
   let link_features =
@@ -842,25 +838,66 @@ module Doc = struct
 
   module Category = String
   module Name = Knowledge.Name
-  module Descr = String
+  module Descr = struct
+    type t = {
+      desc : string;
+      code : string option;
+      loc : Lisp.Loc.t option;
+    }
 
-  type index = (string * (Name.t * string) list) list
+    let normalize_location : loc -> loc = fun loc -> {
+        loc with file = Filename.basename loc.file;
+      }
+
+    let create prog def =
+      let src = Lisp.Program.sources prog in
+      let desc = Info.normalize_text (Lisp.Def.docs def) in
+      let loc = Lisp.Source.loc src def.id in
+      if Lisp.Source.has_loc src def.id then {
+        desc;
+        code = Some (Format.asprintf "%a" (Lisp.Source.pp src) loc);
+        loc = Some (normalize_location loc);
+      } else {desc; code = None; loc = None}
+
+    let merge_desc x y = match x,y with
+      | "", y -> y
+      | x, "" -> x
+      | x,y when String.equal x y -> x
+      | x,y -> sprintf "%s\nOR\n%s" x y
+
+    let merge x y = {
+      desc = merge_desc x.desc y.desc;
+      code = Option.first_some x.code y.code;
+      loc = Option.first_some x.loc y.loc;
+    }
+
+    let has_source {code} = Option.is_some code
+
+    let pp_location ppf {loc} = match loc with
+      | None -> ()
+      | Some loc -> Lisp.Loc.pp ppf loc
+
+    let pp_source ppf {code} = match code with
+      | None -> ()
+      | Some code -> Format.fprintf ppf "%s" code
+
+    let pp ppf {desc} = Format.fprintf ppf "%s" desc
+  end
+
+  type index = (string * (Name.t * Descr.t) list) list
 
   let normalize xs =
-    Map.of_alist_reduce (module Name) xs ~f:(fun x y -> match x,y with
-        | "", y -> y
-        | x, "" -> x
-        | x,y when String.equal x y -> x
-        | x,y -> sprintf "%s\nOR\n%s" x y) |>
+    Map.of_alist_reduce (module Name) xs ~f:Descr.merge |>
     Map.to_alist
 
   let describe prog item =
-    Lisp.Program.get prog item |> List.map ~f:(fun x ->
-        let name = Name.create (Lisp.Def.name x) in
-        let info = Info.create ~desc:(Lisp.Def.docs x) name in
-        name,Info.desc info) |> normalize
+    Lisp.Program.fold prog item ~init:[] ~f:(fun ~package def defs ->
+        let name = Name.create ~package (Lisp.Def.name def) in
+        (name,Descr.create prog def) :: defs) |> normalize
 
-  let index p = Lisp.Program.Items.[
+  let remove_empty = List.filter ~f:(function (_,[]) -> false | _ -> true)
+
+  let create_index p = remove_empty@@Lisp.Program.Items.[
       "Macros", describe p macro;
       "Substitutions", describe p subst;
       "Constants", describe p const;
@@ -868,6 +905,7 @@ module Doc = struct
       "Methods", describe p meth;
       "Parameters", describe p para;
       "Primitives", describe p primitive;
+      "Primitives", describe p semantics;
       "Signals", describe p signal;
     ]
 
@@ -875,11 +913,20 @@ module Doc = struct
     open Machine.Syntax
     let generate_index : index Machine.t =
       Machine.Local.get state >>| fun s ->
-      index s.program
+      create_index s.program
   end
 end
 
 let primitive = lisp_primitive
-module Semantics = Bap_primus_lisp_semantics
+module Semantics = struct
+  include Bap_primus_lisp_semantics
+  let documentation unit =
+    KB.Syntax.(typed_program unit >>| Doc.create_index)
+end
+
 module Unit = Semantics.Unit
 module Attribute = Lisp.Attribute
+module Context = struct
+  let of_program = Lisp.Program.context
+  include Lisp.Context
+end

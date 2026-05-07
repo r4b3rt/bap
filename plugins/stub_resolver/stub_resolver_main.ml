@@ -37,12 +37,13 @@ for more details on the format of accepted inputs):
 
 |}
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_core_theory
 open Bap_knowledge
 open Bap_main
 open KB.Syntax
+module Sys = Caml.Sys
 
 include Loggers()
 
@@ -52,6 +53,8 @@ let known_stub_names = [
   "__stubs";
   ".MIPS.stubs";
 ]
+
+let sites = Stub_resolver_sites.paths
 
 let system_signatures_folder =
   Filename.concat Extension.Configuration.sysdatadir "signatures"
@@ -85,7 +88,20 @@ let signatures = Extension.Configuration.parameters
            inferred from the word, i.e., the leading zeros are not \
            discarded. By default we search in the current working \
            folder, " ^ user_signatures_folder ^ ", and in " ^
-          system_signatures_folder )
+          system_signatures_folder ^ ", and in the following sites:" ^
+          (String.concat ~sep:"; " sites))
+
+let link_only = Extension.Configuration.parameter
+    Extension.Type.(list string) "link-only"
+    ~doc:"A list of subroutine names that are to be exclusively \
+          considered for redirecting calls to stubs to calls to \
+          the implementations. An empty list means that no stubs \
+          will be exclusively considered."
+
+let no_link = Extension.Configuration.parameter
+    Extension.Type.(list string) "no-link"
+    ~doc:"A list of stub names that will not be linked to their \
+          implementations."
 
 module Stubs : sig
   type t
@@ -337,30 +353,61 @@ let detect_stubs_by_signatures () : unit =
     Option.bind (find_mem target code addr) ~f:(fun mem ->
         Option.some_if (matches sigs mem) ())
 
-let update prog =
-  let resolver = Stub_resolver.run prog in
+let mangle_name addr tid name =
+  match addr with
+  | Some a ->
+    sprintf "%s@%s" name @@
+    Word.string_of_value ~hex:true a
+  | None -> sprintf "%s%%%s" name (Tid.to_string tid)
+
+let update prog ~link_only ~no_link =
+  let resolver = Stub_resolver.run prog ~link_only ~no_link in
   let stubs = Stub_resolver.stubs resolver
   and links = Stub_resolver.links resolver in
-  (object inherit Term.mapper
+  let impls = Map.data links |> Tid.Set.of_list in
+  let stub_names =
+    Term.enum sub_t prog |>
+    Seq.fold ~init:String.Set.empty ~f:(fun s sub ->
+        if Set.mem stubs @@ Term.tid sub
+        then Set.add s @@ Sub.name sub
+        else s) in
+  (object inherit Term.mapper as super
     method! map_sub sub =
-      if Set.mem stubs (Term.tid sub)
-      then Term.set_attr sub Sub.stub ()
-      else sub
+      let tid = Term.tid sub in
+      let sub =
+        if Set.mem stubs tid then
+          Term.set_attr sub Sub.stub ()
+        else if Set.mem impls tid then
+          let name = Sub.name sub in
+          if Set.mem stub_names name then
+            let addr = Term.get_attr sub address in
+            let new_name = mangle_name addr tid name in
+            info "mangling implementation %s to %s" name new_name;
+            Sub.with_name sub new_name
+          else sub
+        else sub in
+      super#map_sub sub
     method! map_jmp jmp =
       match Jmp.alt jmp with
       | None -> jmp
       | Some alt -> match Jmp.resolve alt with
         | Second _ -> jmp
         | First tid -> match Map.find links tid with
-          | Some tid' ->
-            Jmp.with_alt jmp (Some (Jmp.resolved tid'))
-          | _ -> jmp
+          | Some tid' -> Jmp.with_alt jmp (Some (Jmp.resolved tid'))
+          | None -> jmp
   end)#run prog
 
-let abi_pass = Project.map_program ~f:update
+let abi_pass ctxt =
+  let link_only =
+    String.Set.of_list @@
+    Extension.Configuration.get ctxt link_only in
+  let no_link =
+    String.Set.of_list @@
+    Extension.Configuration.get ctxt no_link in
+  Project.map_program ~f:(update ~link_only ~no_link)
 
 let () = Extension.declare ~doc @@ fun ctxt ->
-  Bap_abi.register_pass abi_pass;
+  Bap_abi.register_pass @@ abi_pass ctxt;
   mark_plt_as_stub ();
   detect_stubs_by_signatures ();
   Stubs.prepare ctxt;

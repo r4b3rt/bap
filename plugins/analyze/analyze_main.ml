@@ -46,10 +46,11 @@ $(b,:) instead of $(b,-) or $(b,--), e.g.,
 |}
 
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_main
 open Bap_knowledge
 open Bap.Std
+module Sys = Caml.Sys
 
 include Loggers()
 
@@ -355,3 +356,5 @@ let () =
 let () = Extension.Error.register_printer @@ function
   | Fail problem -> Some (string_of_problem problem)
   | _ -> None
+
+let () = Extension.declare ~doc @@ fun _ -> Ok ()

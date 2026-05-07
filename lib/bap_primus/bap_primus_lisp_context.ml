@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 
@@ -9,7 +9,7 @@ module Attribute = Bap_primus_lisp_attribute
 module Feature = String
 module Name = String
 
-type t = Feature.Set.t Name.Map.t [@@deriving compare, equal, sexp]
+type t = Feature.Set.t Name.Map.t [@@deriving bin_io, compare, equal, sexp]
 let empty = Name.Map.empty
 
 type Attribute.error += Unterminated_quote
@@ -31,27 +31,32 @@ let endian proj = Project.arch proj |>
                   | BigEndian -> "big"
 let features = Feature.Set.of_list
 
+let enum (type t) (module E : KB.Enum.S with type t = t) v =
+  KB.Name.unqualified (E.name v)
+
 let of_project proj =
   let t = Project.target proj in
   let targets =
     t :: Theory.Target.parents t |>
-    List.map ~f:(fun t -> KB.Name.unqualified @@ Theory.Target.name t) in
+    List.concat_map ~f:(fun t ->
+        KB.Name.unqualified (Theory.Target.name t) ::
+        Set.to_list (Theory.Target.nicknames t)) in
   Name.Map.of_alist_exn [
     "arch", features @@ [
       Arch.to_string (Project.arch proj);
     ] @ attr proj Bap_abi.name;
     "abi", features @@ attr proj Bap_abi.name @ [
-        Theory.Abi.to_string (Theory.Target.abi t)
+        enum (module Theory.Abi) (Theory.Target.abi t)
       ];
     "fabi", features [
-      Theory.Fabi.to_string @@ Theory.Target.fabi t;
+      enum (module Theory.Fabi) @@ Theory.Target.fabi t;
     ];
     "filetype", features [
-      Theory.Filetype.to_string @@ Theory.Target.filetype t;
+      enum (module Theory.Filetype) @@ Theory.Target.filetype t;
     ];
     "endian", features [endian proj];
     "endianness", features [
-      Theory.Endianness.to_string @@ Theory.Target.endianness t;
+      enum (module Theory.Endianness) @@ Theory.Target.endianness t;
     ];
     "target", features targets;
     "bits", features [sprintf "%d" (Theory.Target.bits t)];
@@ -60,11 +65,9 @@ let of_project proj =
     features [sprintf "%d" (Theory.Target.data_addr_size t)];
     "code-addr-size",
     features [sprintf "%d" (Theory.Target.code_addr_size t)];
-    "system", features [
-      Theory.System.to_string @@ Theory.Target.system t
+    "target-system", features [
+      enum (module Theory.System) @@ Theory.Target.system t
     ];
-
-
   ]
 
 let create descs =
@@ -169,8 +172,17 @@ let join xs ys = Ok (merge xs ys)
 
 let domain = KB.Domain.define "context"
     ~empty ~order ~join
+    ~inspect:sexp_of
 
 let t = Attribute.declare "context"
     ~package:"core"
     ~domain
     ~parse
+
+let slot =
+  KB.Class.property Theory.Unit.cls "primus-lisp-context"
+    ~public:true
+    ~persistent:(KB.Persistent.of_binable (module struct
+                   type nonrec t = t [@@deriving bin_io]
+                 end))
+    ~package:"bap" domain

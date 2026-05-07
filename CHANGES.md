@@ -1,3 +1,261 @@
+2.5.0
+=====
+
+### Features
+- #1390 adds the flattening pass to the library interface
+- #1389 adds `insn-code` to the `Theory.Semantics` class
+- #1394 adds the `Bitvec.modular` function
+- #1395 adds LLVM 13/14 compatibility
+- #1408 adds support for mips64el target
+- #1409 adds the `--print-missing` option to print unlifed instructions
+- #1410 adds several new Primus Lisp primitives and new instructions
+- #1428 adds the monad choice interface to the knowledge base
+- #1429 refines the `Theory.Target.matches` and adds the `matching` function
+- #1434 adds arm unpredicated BL instruction
+- #1444 adds the x86/amd64 plt corrector component to the Primus base system
+- #1445 updates the `Sub.compute_liveness` function to handle SSA form
+- #1446 provides the new liveness analysis
+- #1452 implements pcode floating-point and special operators
+- #1457 adds optional `join` for `Knowledge.Domain.mapping`
+- #1461 enables v8.{1,2,3,4,5,6}a revisions for the aarch64 target
+- #1464 adds arbitrary-precision loopless clz and popcount to Primus Lisp
+- #1460 adds compatibility with Core_kernel >= 0.15
+- #1466 adds semantics for the x86 SSE floating-point instructions
+- #1469 adds the jump destination addresses/names to the assembly output
+- #1458 adds more aarch64 instructions
+- #1473 adds an `--arm-features` command-line option
+- #1476 implements the naming scheme for interrupts
+- #1479 reifies external subroutines and intrinsics into I
+- #1482 enables BIR subroutines without an explicit return
+- #1481 enables disabling the patterns plugin
+- #1483 implements floating-point intrinsic subroutines
+- #1488 adds compatibility with OCaml 4.14 and Core v0.15
+- #1489 adds some missing functionality to Primus Lisp POSIX
+- #1490 adds some missing C POSIX APIs
+- #1492 makes bit-twiddling operations easier to read and analyze
+- #1493 adds smart constructors and destructors to the C types library
+- #1491 adds semantics for the x86-64 `popq` instruction
+- #1497 extends the C.Abi library
+- #1498 adds the extended lvalue assignment to Primus Interpreter
+- #1499 makes BIL smart constructors smart
+- #1500 makes argument passing well-typed
+- #1503 reimplements C types printing functions
+- #1504 extends the demanglers library to the new targets infrastructure
+- #1505 rewrites x86 abi using the new infrastructure
+- #1511 implements some missing Thumb instructions
+- #1513 implements the x86_64 padd instructions
+- #1515 allows target overriding
+- #1516 adds armv8 BFM instructions
+- #1517 publishes Theory.Target.nicknames and extends Primus Contexts
+- #1519 extends Core Theory with target registration and lookup
+- #1520 adds the high-level calling convention specification language
+- #1521 reimplements x86 targets using the new infrastructure
+- #1522 reimplements ARM ABI and target specification
+- #1523 rewrites mips targets and abi
+- #1524 adds C data type layout
+- #1525 adds the pass by reference argument passing method
+- #1526 restructures powerpc targets and reimplements ppc32 eabi
+- #1529 makes the ABI processors usable programmatically
+
+### Bug Fixes
+- #1391 fixes ARM/Thumb `movt` semantics
+- #1396 fixes the path plugin loader path handling
+- #1414 fixes the pc value in pc-relative thumb ldr
+- #1420 fixes the low-level Disasm_expert.Basic.create function
+- #1421 fixes the core-theory plugin semantics tags
+- #1426 fixes arm predication
+- #1438 reads correctly unqualified system names
+- #1439 fixes a bug in the KB update function, adds new functions
+- #1448 fixes an accidental dependency on the bap-traces internal module
+- #1449 fixes unconditional pop with return in thumb
+- #1455 fixes register assignments in p-code semantics
+- #1462 fixes the `cast-signed` Primus Lisp primitive
+- #1463 fixes the arithmetic modulus in Primus Lisp primitives
+- #1465 fixes handling of `jmp term`s in the flatten pass
+- #1467 fixes a sporadic internal error in the cache garbage collector
+- #1468 fixes the relocation symbolizer incorrect handling of intrinsics
+- #1458 fixes aarch64 bitmask immediate encoding
+- #1486 fixes type unification on binary operation application
+- #1485 fixes little-endian MIPS disassembling
+- #1494 fixes the encoding of the comparison operators
+- #1496 fixes registers allocation in the abi specification DSL
+- #1502 fixes the bitvector order function
+- #1528 fixes armv4t name that was missing the arm prefix
+
+
+### Tooling
+- #1393 improves the Primus Lisp documentation generator
+- #1397 fixes the macOS CI build
+- #1399 updates the url of the testing repo to use the encrypted version
+- #1432 updates the docker image
+- #1435 selects specific llvm components for linking
+- #1447 updates to the git+https in the dockerfiles
+- #1470 corrects linking of Unix library in configure
+- #1478 fixes the opam/opam dev-repo protocol which broke the release action
+- #1480 adds an automation to build a docker image for the latest release
+- #1514 adds the mmap dependency
+
+
+### Improvements
+- #1386 adds missing ARM target ABI information
+- #1388 adds aliasing information for x86
+- #1392 adds an option to directly use ogre files as a loader
+- #1398 provides the assembly string as a promise (removes #undefined)
+- #1400 improves the computation of the instruction properties
+- #1401 improves the KB.Value merge operation
+- #1402 moves promises and theories into the core-theory plugin
+- #1403 moves knowledge base rules from the library to the plugin
+- #1404 improves the peformance of the byte patterns matcher (1/3)
+- #1405 improves the performance of bitvectors (2/3)
+- #1411 [optimization] do not store empty objects in the knowledge base
+- #1412 updates the KB version number and adds a few more microoptimizations
+- #1413 updates bap to latest OCaml, switches to newer bitstrings
+- #1415 switches to patricia trees in the KB implementation
+- #1416 Reimplements x86 bitscan and popcnt
+- #1418 uses the builtin clz function from base, instead of the custom one
+- #1417 relaxes the speculative disassembler constraints
+- #1419 allows bapbuild to work when bap and other defaults are not present
+- #1422 relaxes interpreters to allow ill-typed operations
+- #1425 applies ARM modified immediate (MIC) decoding in more places
+- #1423 reimplements clz using the branchless/loopless algorithm
+- #1427 removes unnecessary units from the knowledge base
+- #1430 refines and extends target definitions
+- #1431 partially upgrades byteweight to work with the modern bap
+- #1441 uses Allen's Interval Algebra in the KB.Value merge implementation
+- #1442 wraps proposals into with_empty and adds more guards
+- #1443 adds subinstruction contraction to improve the ghidra lifter output
+- #1433 adds mode events to traces
+- #1450 hushes bil lifters
+- #1451 removes falls-through from unconditional branches in IR reification
+- #1454 improves the setw function used
+- #1456 removes Thumb2 branches from the legacy ARM lifter
+- #1471 uses function starts as the entires when building the symtab
+- #1472 improves disassembler performance
+- #1475 unifies name generation for IR subroutines
+- #1477 removes the special Primus Lisp primitive
+- #1484 disables byteweight
+- #1487 reduces memory footprint
+- #1501 makes all C data type sizes a multitude of their alignment
+- #1506 optimizes encoding computation for x86
+- #1510 adds an example on how to create a monad transformer stack (#1354)
+- #1518 uses signed casts for promoting arguments
+- #1530 turns x86 endbr instructions into nops
+- #1531 adds patterns to recognize certain x86 endbr as function starts
+- #1532 improves the main subroutine discovery within glibc runtime
+- #1535 prevents knowledge conflicts on mangled names
+
+2.4.0
+=====
+
+### Features
+
+- #1325 adds armeb abi
+- #1326 adds experimental Ghidra disassembler and lifting backend
+- #1332 adds the flatten pass
+- #1341 adds context variables to the knowledge base
+- #1343 adds register aliases to the Core Theory
+- #1358 adds LLVM 12 support
+- #1360 extends the knowledge monad interface
+- #1363 adds forward-chaining rules and Primus Lisp methods
+- #1364 adds a generic byte pattern matcher based on Ghidra
+- #1365 adds support for the Thumb IT blocks
+- #1369 adds some missing `t2LDR.-i12` instructions to the Thumb lifter
+
+### Improvements
+
+- #1336 improves the `main` function discovery heuristics
+- #1337 adds more Primus Lisp stubs and fixes some existing
+- #1342 uses context variables to store the current theory
+- #1344 uses the context variables to store the Primus Lisp state
+- #1355 tweaks symbolization and function start identification facilities
+- #1353 improves arm-family support
+- #1356 stops proposing aliases as potential subroutine names
+- #1361 rewrites knowledge and primus monads
+- #1370 tweaks Primus Lisp' method resolution to keep super methods
+- #1375 error handling and performance tweaks
+- #1378 improves reification of calls in the IR theory (part I)
+- #1379 improves semantics of some ITT instructions
+- #1380 Fixes handling of fallthroughs in IR theory
+
+
+### Bug Fixes
+
+- #1328 fixes C.ABI.Args `popn` and `align_even` operators
+- #1329 fixes frame layout calculation in the Primus loader
+- #1330 fixes the address size computation in the llvm backend
+- #1333 fixes and improves label handling in the IR theor
+- #1338 fixes core:eff theory
+- #1340 fixes the Node.update for graphs with unlabeled nodes
+- #1347 fixes a knowledge base race condition in the run plugin
+- #1348 fixes endianness in the raw loader
+- #1349 short-circuits evaluation of terms in Bap_main.init
+- #1350 fixes variable rewriter and some Primus Lisp symbolic functions
+- #1351 fixes and improves aarch64 lifter
+- #1352 fixes several Primus Lisp stubs
+- #1357 fixes some T32 instructions that are accessing to PC
+- #1359 fixes handling of let-bound variables in flatten pass
+- #1366 fixes a bug in the `cmp` semantics
+- #1374 fixes handling modified immediate constants in ARM T32 encoding
+- #1376 fixes fresh variable generation
+- #1377 fixes the IR theory implementation
+
+
+### Tooling
+
+- #1319 fixes the shared folder in deb packages
+- #1320 removes sudo from postinst and postrm actions in the deb packages
+- #1321 enables push flag in the publish-docker-image action
+- #1323 fixes the ppx_bap version in the dev-repo opam file
+- #1331 fixes the docker publisher, also enables manual triggering
+- #1327 fixes a typo in the ubuntu dockerfiles
+- #1345 fixes bapdoc
+- #1346 nightly tests are failing due to a bug upstream
+
+
+
+2.3.0
+=====
+
+### Features
+
+- #1263 fixes PE/COFF sections decoding
+- #1265 introduces BIL special encodings and publishes BIL CT parser
+- #1266 introduces the BIL code slot and a few convenience functions
+- #1268 adds a Primus Lisp fronted
+- #1273 rewrites the read-symbols plugin to enable multiple files support
+- #1274 updates the raw loader to enable better support for targets
+- #1275 overhauls target/value abstraction and introduces roles (4/n)
+- #1276 adds the --target parameter to disassemble and compare commands
+- #1277 enables writing program semantics (lifting) in Primus Lisp
+- #1278 moves to centralized and uniform path handling
+- #1286 adds namepspaces (packages) to Primus Lisp
+- #1287 adds riscv32 and riscv64 support
+- #1288 restores output for non-empty instructions
+- #1289 fixes the unit tracking mechanism
+- #1290 implements ABI description eDSL
+- #1291 adds armv8 (aarch64) lifter
+- #1293 implements the array to pointer conversion in C ABI processor
+- #1294 introduces bap dependencies command
+- #1296 uses ARM EABI for Thumb binaries
+- #1295 adds YAML as an alternative output of the specification command
+- #1297 adds the missing ux*, sx*, s?bz instructions
+- #1298 adds more thumb-specific instructions
+- #1304 adds the --show-knowledge option to bap mc
+- #1303 preserves the encoding name of the instruction
+- #1307 renames the core-theory package to just core
+- #1306 adds `bap primus-lisp-documentation` command
+- #1309 adds support for big-endian arm and thumb architectures
+
+### Bug Fixes
+
+- #1272 fixes two bugs in the Memory module
+- #1280 fixes, cleans, and optimizes KB AVL tree implementation
+- #1281 prunes empty segments
+- #1282 fixes recipes search paths
+- #1285 fixes a missing str dependency in the x86 plugin
+- #1308 fixes a bug in the method that computes C padding.
+- #1310 removes the old unit tracking module, fixes the modern one
+
 2.2.0
 =====
 

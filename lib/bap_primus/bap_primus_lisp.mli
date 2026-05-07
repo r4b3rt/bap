@@ -1,10 +1,11 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Format
 open Bap_primus_types
 open Bap_core_theory
 
 type program
+type context
 type message
 
 
@@ -15,6 +16,13 @@ module Load : sig
   val pp_error : formatter -> error -> unit
 end
 
+module Context : sig
+  type t = context
+  val create : (string * string list) list -> context
+  val of_program : program -> t
+  val pp : Format.formatter -> t -> unit
+end
+
 module Doc : sig
   module type Element = sig
     type t
@@ -22,8 +30,13 @@ module Doc : sig
   end
 
   module Category : Element
-  module Name     : Element
-  module Descr    : Element
+  module Name     = KB.Name
+  module Descr    : sig
+    include Element
+    val has_source : t -> bool
+    val pp_location : formatter -> t -> unit
+    val pp_source : formatter -> t -> unit
+  end
   type index = (Category.t * (Name.t * Descr.t) list) list
 
   module Make(Machine : Machine) : sig
@@ -141,20 +154,53 @@ module Make (Machine : Machine) : sig
 end
 
 module Semantics : sig
+  type value = unit Theory.Value.t
   type KB.conflict += Unresolved_definition of string
   type KB.conflict += Illtyped_program of Type.error list
+  type KB.conflict += Failed_primitive of KB.Name.t * string
 
   val program : (Theory.Source.cls, program) KB.slot
+  val context : (Theory.Unit.cls, context) KB.slot
   val definition : (Theory.program, Theory.Label.t option) KB.slot
   val name : (Theory.program, KB.Name.t option) KB.slot
   val args : (Theory.program, unit Theory.Value.t list option) KB.slot
   val symbol : (Theory.Value.cls, String.t option) KB.slot
   val static : (Theory.Value.cls, Bitvec.t option) KB.slot
   val enable : ?stdout:Format.formatter -> unit -> unit
+  val failp : ('a, Format.formatter, unit, 'b KB.t) format4 -> 'a
+
+
   val declare :
     ?types:Type.signature ->
-    ?docs:string -> ?package:string -> string -> unit
+    ?docs:string ->
+    ?package:string ->
+    ?body:(Theory.Target.t -> (Theory.Label.t -> Theory.Value.Top.t list -> unit Theory.eff) KB.t) ->
+    string -> unit
 
+
+  module Value : sig
+    type t = unit Theory.Value.t
+    val static : Bitvec.t -> t
+    val symbol : string -> t
+    val custom : (Theory.Value.cls, 'a) KB.slot -> 'a -> t
+    val nil : t
+  end
+
+
+  module Effect : sig
+    type t = unit Theory.Effect.t
+    val pure : Value.t -> t
+    val return : Value.t -> t KB.t
+  end
+
+  val signal :
+    ?params:[< Type.parameters] ->
+    ?docs:string ->
+    (Theory.program,'p) KB.slot ->
+    (Theory.Label.t -> 'p -> Value.t list KB.t) ->
+    unit
+
+  val documentation : Theory.Unit.t -> Doc.index KB.t
 end
 
 module Unit : sig
@@ -162,6 +208,8 @@ module Unit : sig
   val is_lisp : Theory.Unit.t -> bool KB.t
   val language : Theory.language
 end
+
+
 
 module Attribute : sig
   type 'a t

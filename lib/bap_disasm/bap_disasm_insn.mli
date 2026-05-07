@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Regular.Std
 open Bap_types.Std
@@ -41,6 +41,13 @@ val mustn't : must property -> t -> t
 val should    : may  property -> t -> t
 val shouldn't : may  property -> t -> t
 
+
+module Seqnum : sig
+  type t = int
+  val label : ?package:string -> t -> Theory.Label.t KB.t
+  val slot : (Theory.program, t option) KB.slot
+  val fresh : tid KB.t
+end
 
 module Slot : sig
   type 'a t = (Theory.Effect.cls, 'a) KB.slot

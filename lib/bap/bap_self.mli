@@ -1,5 +1,5 @@
 open Format
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_future.Std
 open Bap_main.Extension
 
@@ -62,6 +62,11 @@ module Create() : sig
 
     val determined : 'a param -> 'a future
 
+    val declare_extension :
+      ?features:string list ->
+      ?provides:string list ->
+      ?doc:string ->
+      (reader -> unit) -> unit
     val when_ready : (reader -> unit) -> unit
 
     type manpage_block = [

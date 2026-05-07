@@ -1,11 +1,11 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_knowledge
 
 module KB = Knowledge
 
 type cls = Effects
 
-let package = "core-theory"
+let package = "core"
 
 module Sort = struct
   type effects = Top | Set of Set.M(KB.Name).t

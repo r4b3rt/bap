@@ -1,11 +1,11 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_types.Std
 open Bap_image_std
 include Bap_disasm_target_intf
 
 let create_stub_target arch =
   let module Lifter = struct
-    let lift _ _ = Or_error.error_string "not implemented"
+    let lift _ _ = Ok []
     let addr_size = Arch.addr_size arch
 
     module CPU = struct

@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Or_error
 
 open Bap.Std
@@ -187,7 +187,9 @@ let of_data (data : Bigstring.t) : Img.t option =
     None
 
 let () =
-  Config.when_ready @@ fun _ ->
+  Config.declare_extension
+    ~doc:"provides an alternative ELF image loader"
+    ~provides:["elf"; "dwarf"; "loader"] @@ fun _ ->
   match Image.register_backend ~name of_data with
   | `Ok -> ()
   | `Duplicate ->

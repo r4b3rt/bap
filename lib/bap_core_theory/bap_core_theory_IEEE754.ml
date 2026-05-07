@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory_value
 
 type 'a num = 'a Sort.num
@@ -92,7 +92,7 @@ let binary = function
   | k -> binary k
 
 module Sort = struct
-  let ieee754 = Sort.Name.declare ~package:"core-theory" "IEEE754"
+  let ieee754 = Sort.Name.declare ~package:"core" "IEEE754"
   let format {base; w; t=x; k} = Float.Format.define
       Sort.(int base @-> int w @-> int x @-> sym ieee754)
       (Bitv.define k)

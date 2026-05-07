@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_c_data
 open Bap_c_type
@@ -8,11 +8,28 @@ type 'a unqualified = (no_qualifier, 'a) spec
 
 type bits = Int.t
 
+let next_multitude_of ~n x = (x + (n-1)) land (lnot (n-1))
+
+
+let padding alignment offset =
+  let align = Size.in_bits alignment in
+  (align - offset mod align) mod align
+
+
+let max_enum_elt xs =
+  List.fold xs ~init:None ~f:(fun m (_,x) ->
+      match m,x with
+      | None,None -> Some 0L
+      | Some m, None -> Some Int64.(succ m)
+      | Some m, Some x -> Some Int64.(max m x)
+      | None,x -> x) |> function
+  | None -> 0L
+  | Some x -> x
 
 class base (m : model) = object(self)
   method integer (t : integer) : size =
     match m,t with
-    | _,#char -> `r8
+    | _,(`bool|#char) -> `r8
     | _,#short -> `r16
     | `LP32,#cint -> `r16
     | (`ILP32|`LLP64|`LP64),#cint -> `r32
@@ -56,10 +73,9 @@ class base (m : model) = object(self)
     | `Pointer _ -> (self#pointer :> size)
 
   method padding t offset : size option =
-    let align = Size.in_bits (self#alignment t) in
-    match (align - offset mod align) mod align with
-    | 0 -> None
-    | n -> Some (Size.of_int_exn n)
+    match Size.of_int @@ padding (self#alignment t) offset with
+    | Error _ -> None
+    | Ok s -> Some s
 
   method alignment (t : Bap_c_type.t) : size =
     let byte = `r8 in
@@ -73,14 +89,17 @@ class base (m : model) = object(self)
     | `Function _ -> (self#pointer :> size)
     | #scalar as t -> self#scalar t
 
-
-  method bits : t -> Int.t option = fun t -> match t with
-    | `Void -> None
-    | #scalar as t -> Some (Size.in_bits (self#scalar t))
-    | `Function _ -> None
-    | `Union s -> self#union s
-    | `Array s -> self#array s
-    | `Structure s -> self#structure s
+  method bits : t -> Int.t option = fun t ->
+    let size = match t with
+      | `Void -> None
+      | #scalar as t -> Some (Size.in_bits (self#scalar t))
+      | `Function _ -> None
+      | `Union s -> self#union s
+      | `Array s -> self#array s
+      | `Structure s -> self#structure s in
+    Option.map size ~f:(fun size ->
+        let alignment = self#alignment t in
+        next_multitude_of ~n:(Size.in_bits alignment) size)
 
   method array : _  -> Int.t option =
     fun {Spec.t={Array.element=t; size}} -> match size with
@@ -104,8 +123,5 @@ class base (m : model) = object(self)
         | Some sz -> match self#bits field with
           | None -> None
           | Some sz' ->
-            let pad = match self#padding field sz with
-              | None -> 0
-              | Some sz -> Size.in_bits sz in
-            Some (sz + sz' + pad))
+            Some (sz + sz' + padding (self#alignment field) sz))
 end

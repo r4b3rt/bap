@@ -9,7 +9,7 @@ build: setup.ml
 
 .PHONY: doc
 doc:
-	@ocamlbuild -pkgs bap,bap-plugins,core_kernel,core_kernel.caml_unix tools/bapdoc.native
+	@ocamlfind ocamlopt -linkpkg -package bap-plugins,core_kernel,core_kernel.caml_unix tools/bapdoc.ml -o bapdoc.native
 	make -C doc
 
 all:
@@ -55,7 +55,7 @@ testsuite:
 	git clone https://github.com/BinaryAnalysisPlatform/bap-testsuite.git testsuite
 
 check: testsuite
-	make REVISION=3720beda -C testsuite
+	make REVISION=5c65cc07c48ff738e843c0fc6dfb16a0eeb572c3 -C testsuite
 
 .PHONY: indent check-style status-clean
 

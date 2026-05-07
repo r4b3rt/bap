@@ -1,5 +1,5 @@
 open Bap_core_theory
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_future.Std
 open Bap.Std
 include Self()
@@ -20,12 +20,13 @@ let provide_roots file funcs =
     if Theory.Target.belongs Arm_target.parent t
     then !!None
     else
-      KB.collect Theory.Label.addr label >>=? fun addr ->
-      KB.collect Theory.Label.unit label >>=? fun unit ->
-      KB.collect Theory.Unit.bias unit >>= fun bias ->
-      KB.collect Theory.Unit.target unit >>|
-      Theory.Target.code_addr_size >>= fun bits ->
-      KB.collect Theory.Unit.path unit >>|? fun path ->
+      let*? addr = label-->Theory.Label.addr in
+      let*? unit = label--> Theory.Label.unit in
+      let*? path = unit-->Theory.Unit.path in
+      let* bias = unit-->Theory.Unit.bias in
+      let+ bits =
+        KB.collect Theory.Unit.target unit >>|
+        Theory.Target.code_addr_size in
       if String.equal path file then
         let bias = Option.value bias ~default:Bitvec.zero in
         let addr =
@@ -33,7 +34,6 @@ let provide_roots file funcs =
           Bitvec.((addr - bias) mod modulus bits) in
         Option.some_if (Hashtbl.mem funcs addr) true
       else None in
-  promise_property Theory.Label.is_valid;
   promise_property Theory.Label.is_subroutine
 
 let strip str =
@@ -125,4 +125,7 @@ let () =
     `S  "SEE ALSO";
     `P  "$(b,bap-plugin-objdump)(1)"
   ];
-  Config.when_ready (fun {get=_} -> main ())
+  Config.declare_extension
+    ~doc:"extracts symbols and function starts using radare2"
+    ~provides:["symbolizer"; "radare2"]
+    (fun {get=_} -> main ())

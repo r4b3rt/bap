@@ -1,6 +1,6 @@
 (** BAP Standard Library  *)
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Monads.Std
 open Regular.Std
 open Graphlib.Std
@@ -459,7 +459,7 @@ module Std : sig
       The following plugin prints all sections in a file:
 
       {[
-        open Core_kernel
+        open Core_kernel[@@warning "-D"]
         open Bap.Std
         open Format
 
@@ -628,7 +628,7 @@ module Std : sig
    **)
   module Legacy : sig
     module Monad : sig
-      open Core_kernel
+      open Core_kernel[@@warning "-D"]
       module type Basic = Monad.Basic
       module type Basic2 = Monad.Basic2
       module type Infix = Monad.Infix
@@ -1143,39 +1143,13 @@ module Std : sig
       suggested to use them, if you know what kind of operands you're
       expecting.
 
-      {2 Clarification on size-morphism }
+      {2:bv_signs Clarification on signs}
 
-      Size-monomorphic operations (as opposed to size-polymorphic
-      comparison) doesn't allow to compare two operands with different
-      sizes, and either raise an exception or return [Error]. If we would
-      have a type safe interface, with type [t] defined as [type 'a t],
-      where ['a] stands for size, then size-monomorphic operations will
-      have type ['a t -> 'a t -> _], and size-polymorphic ['a t -> 'b t -> _].
-
-      By default, size-polymorphic comparison is used. To understand
-      the ordering relation one can think that a lexical ordering is
-      specified on a tuple [(x,n)], where [x] is the number and [n] is
-      the size. For example, the following sequence is in an ascending
-      order:
-
-      {[ 0x0:1, 0x0:32, 0x0:64, 0x1:1, 0x1:32, 0xD:4, 0xDEADBEEF:32]}.
-
-      A size-monomorphic interfaced is exposed in a [Mono] submodule. So
-      if you want a monomorphic map, then just use [Mono.Map] module.
-      Note, [Mono] submodule doesn't provide [Table], since we cannot
-      guarantee that all keys in a hash-table have equal size.
-
-      {2 Clarification on signs}
-
-      By default all numbers represented by a bitvector are considered
-      unsigned. This includes comparisons, e.g., [of_int (-1)
-      ~width:32] is greater than zero. If you need to perform a signed
-      operation, you can use the [signed] operator to temporary cast
-      your value to the signed kind.  We use word "temporary" to
-      emphasize that, the signedness property won't propagate to the
-      result of the operation, e.g. result of the following
-      expression: [Int_exn.(signed x / y)] will not be signed. In other
-      words each new value is created unsigned.
+      By default, all are numbers represented with bitvectors are
+      considered unsigned. This includes the ordering, e.g., [of_int
+      (-1) ~width:32] is greater than [of_int 0 ~width:32]. If you
+      need to perform a signed operation, you can use the [signed]
+      operator create a signed word with the same value.
 
       If any operand of a binary operation is signed, then a signed
       version of an operation is used, i.e., the other operand is
@@ -1191,6 +1165,62 @@ module Std : sig
         let p = x < zero          (* p = false *)
         let q = signed x < zero   (* p = true *)
       ]}
+
+      {2:bv_sizes Clarification on size-morphism }
+
+      Size-monomorphic operations (as opposed to size-polymorphic)
+      expect operands of the same size. When applied to operands of
+      different sizes they either raise exceptions or return
+      an [Error] variant as the result. All arithmetic operations are
+      size-monomorphic and we provide interface that use either
+      exceptions or [Result.t] to indicate the outcome.
+
+      The comparison operation is size-polymorphic by default and
+      takes the size of the bitvector into account. Bitvectors
+      with equal values but different sizes are unequal. The precise
+      order matches with the order of pairs, where the first
+      constituent is the bitvector value, and the second is its size,
+      for example, the following sequence is in an ascending order:
+
+      {[ 0x0:1, 0x0:32, 0x0:64, 0x1:1, 0x1:32, 0xD:4, 0xDEADBEEF:32]}.
+
+      A size-monomorphic interfaced is exposed in a [Mono] submodule. So
+      if you want a monomorphic map, then just use [Mono.Map] module.
+      Note, [Mono] submodule doesn't provide [Table], since we cannot
+      guarantee that all keys in a hash-table have equal size. The
+      order functions provided by the Mono module will raise an
+      exception when applied to bitvectors with different sizes.
+
+      In the default and [Mono] orders, if either of two values is
+      signed (see {!bv_signs}) then the values will be ordered as
+      2-complement signed integers.
+
+      Another alternative orders are [Signed_value_order],
+      [Unsigned_value_order], and [Literal_order]. They will be
+      briefly described below.
+
+      [Signed_value_order] is size-polymoprhic and it simply
+      ignores the sizes of bitvectors and orders them by values, e.g.,
+      the following bitvectors are ordered in the [Value.Signed]
+      order, [FF:8; 0:1; 0F:8; FF:32], and [0:1] is equal to
+      [0:32]. See {!bv_sizes} for more details on the signedness of
+      operations. Note, that the size of a word still affects the
+      order since it defines the position of the most significant bit.
+
+      [Unsigned_value_order] ignores the sign and the size of
+      words and compares them by the unsigned order of their values.
+      he following numbers are ordered with the [Unsigned_value_order]
+      order, [0:1, 1:32, 0F:8 FF:8], and [FF:32] is equal to [FF:8].
+      [Unsigned_value_order] is faster than then any previously
+      described order and is useful when the size of the words should
+      be ignored (or is known to be equal and therefore could be
+      ignored).
+
+      [Literal_order] is the fastest order that takes into account
+      all constituents of bitvectors, like if we will treat a
+      bitvector as triple of its value, size, and sign and order
+      bitvectors using the lexicographical order.
+
 
       {2:bv_string Clarification on string representation }
 
@@ -1235,8 +1265,40 @@ module Std : sig
         expected from integral values.  *)
     include Integer.S with type t := t
 
-    (** A comparable interface with size-monomorphic comparison. *)
+    (** The comparable interface with size-monomorphic comparison. *)
     module Mono : Comparable with type t := t
+
+    (** Compare by value, ignore size, but take into account the sign.
+
+        See {!bv_sizes} for more information.
+        @since 2.5.0
+    *)
+    module Signed_value_order : sig
+      include Binable.S with type t = t
+      include Comparable.S_binable with type t := t
+      include Hashable.S_binable with type t := t
+    end
+
+    (** Compare by value, ignore both the size and the sign.
+
+        See {!bv_sizes} for more information.
+        @since 2.5.0 *)
+    module Unsigned_value_order : sig
+      include Binable.S with type t = t
+      include Comparable.S_binable with type t := t
+      include Hashable.S_binable with type t := t
+    end
+
+    (** The lexicographical order of (value,size,sign) triples.
+
+        See {!bv_sizes} for more information.
+        @since 2.5.0 *)
+    module Literal_order : sig
+      include Binable.S with type t = t
+      include Comparable.S_binable with type t := t
+      include Hashable.S_binable with type t := t
+    end
+
 
     (** Specifies the order of bytes in a word. *)
     type endian =
@@ -2412,6 +2474,18 @@ module Std : sig
     val intrinsic: string Attribute.t
 
 
+    (** [label] a named code location.
+
+        @since 2.4.0  *)
+    val label : string Attribute.t
+
+
+    (** [goto] represents a control-flow transfer to a named label.
+
+        @since 2.4.0 *)
+    val goto : string Attribute.t
+
+
     (** Core Theory specification of BIL.  *)
     module Theory : sig
 
@@ -2432,20 +2506,27 @@ module Std : sig
     *)
     module Apply : sig
 
-      (** [binop op x y] applies the binary operation [op] to [x] and
-          [y].
-          precondition: the expression [BinOp(op,Int x,Int y)] shall be well-typed.*)
+      (** [binop op x y] applies [op] to [x] and [y].
+
+          @before 2.5.0 precondition: the expression [BinOp(op,Intx,Int y)]
+          shall be well-typed.
+
+          @after 2.5.0 if [x] and [y] have different widths then they
+          are extended to the same width, which is the width of the
+          largest operand. If an operator is signed, then it will be
+          correctly sign-extended.
+      *)
       val binop : binop -> word -> word -> word
 
-      (** [unop op x] applies the unary operation [op] to [x].
-          precondition: the expression [Unop(op,Int x)] shall be
-          well-typed.     *)
+      (** [unop op x] applies the unary operation [op] to [x]. *)
       val unop : unop -> word -> word
 
       (** [cast t s x] casts [x] using the cast type [t] to the given
           size [s].
+
           precondition: the expression [Cast(t,s,Int x)] shall be
-          well-typed.  *)
+          well-typed.
+      *)
       val cast : cast -> int -> word -> word
     end
 
@@ -2724,6 +2805,12 @@ module Std : sig
         @since 1.3
     *)
     val check : bil -> (unit,error) Result.t
+
+    (** [sort t] translates the type [t] into a Core Theory sort.
+
+        @since 2.6.0
+    *)
+    val sort : t -> unit Theory.Value.sort
 
     (** BIL type errors.
 
@@ -5494,10 +5581,20 @@ module Std : sig
     type result = (t * Error.t list) Or_error.t
 
     (** [create ?backend filename] creates an image of the file specified
-        specified by the [filename]. If [backend] is equal to "auto", then
-        all backends are tried in order. If only one backend can read this
-        file (i.e., there is no ambiguity), then image is returned. If
-        [backend] is not specified, then the LLVM backend is used. *)
+        by the [filename]. If [backend] is not specified, then
+        all availabe backends are used and their information is
+        merged. If the information provided by all backends agree (i.e.,
+        there's no conflicting information), then image is returned.
+        If [backend] is an explicit file path, then it is read as an
+        OGRE file and used for loading. Otherwise, [backend] should be
+        a name of one of the backends registered either with
+        [register_backend] or [register_loader]. See
+        [available_backends] for the list of available backends.
+
+        @since 2.5.0 accepts backend accepts an explicit file path,
+        note a file path is explicit if it exists and
+        [Fn.non Filename.is_implicit].
+    *)
     val create : ?backend:string -> path -> result
 
     (** [of_string ?backend ~data] creates an image from the specified
@@ -5647,17 +5744,34 @@ module Std : sig
         - [Error err] - a file was corrupted, according to the loader.
     *)
     module type Loader = sig
-
       (** [from_file name] loads a file with the given [name]. *)
       val from_file : string -> Ogre.doc option Or_error.t
 
       (** [from_data data] loads image from the specified array of bytes.  *)
       val from_data : Bigstring.t -> Ogre.doc option Or_error.t
-
     end
 
     (** [register_loader ~name backend] registers new loader. *)
     val register_loader : name:string -> (module Loader) -> unit
+
+    (** Interfaces for working with the Knowledge Base.
+
+        @since 2.6.0
+    *)
+    module KB : sig
+      (** Same as [Loader], but parameterized with the Knowledge monad.  *)
+      module type Loader = sig
+        (** [from_file name] loads a file with the given [name]. *)
+        val from_file : string -> Ogre.doc option knowledge
+
+        (** [from_data data] loads image from the specified array of bytes.  *)
+        val from_data : Bigstring.t -> Ogre.doc option knowledge
+      end
+
+      (** [register_loader ~name backend] registers a new loader that is
+          parameterized with the Knowledge monad. *)
+      val register_loader : name:string -> (module Loader) -> unit
+    end
 
     (** [find_loader name] lookups the loader registered under the
         given [name].
@@ -5799,7 +5913,7 @@ module Std : sig
       val require : (string, (string -> 'a) -> 'a) Ogre.attribute
 
 
-      (** (is-little-endian FLAG)] is set for files with words encoded in the
+      (** [(is-little-endian FLAG)] is set for files with words encoded in the
           little-endian order.
 
           @since 2.2.0  *)
@@ -5854,6 +5968,13 @@ module Std : sig
           [addr].  *)
       val relocation :
         (int64 * addr, (addr -> addr -> 'a) -> 'a) Ogre.attribute
+
+      (** [relative_relocation fixup] a value referenced at the code has
+          address [fixup] and refers to a pointer [p], which is relocated
+          to [p + base_address]. *)
+      val relative_relocation :
+        (addr, (addr -> 'a) -> 'a) Ogre.attribute
+
 
       (** [external_reference addr name] a piece of code at the
           specified address [addr] references an external symbol with
@@ -6607,7 +6728,7 @@ module Std : sig
 
           @param return a function that lifts user data type ['s] to type
           ['r]. It is useful when you need to perform disassembly in some
-          monad, like [Or_error], or [Lwt]. Otherwise, just use [ident]
+          monad, like [Or_error], or [Lwt]. Otherwise, just use [Fn.id]
           function and assume that ['s == 'r].
 
           The disassembler will invoke user provided callbacks. To each
@@ -6751,6 +6872,14 @@ module Std : sig
         (** [ops insn] gives an access to [insn]'s operands.   *)
         val ops  : ('a,'k) t -> op array
 
+        (** [subs insn] an array of subinstructions.
+
+            An instruction can contain subinstructions, which could be
+            accessed with this function. Returns an empty array if
+            there are no subinstructions.
+
+            @since 2.5.0 *)
+        val subs : ('a,'k) t -> ('a,'k) t array
       end
 
       (** Trie maps over instructions  *)
@@ -6975,6 +7104,46 @@ module Std : sig
     (** [pp_adt] prints instruction in ADT format, suitable for reading
         by evaluating in many languages, e.g. Python, Js, etc *)
     val pp_adt : Format.formatter -> t -> unit
+
+
+    (** Subinstruction Sequence Number.
+
+        A subinstruction sequence number plays the role of an address
+        for sub-instruction (which otherwise share the same physical
+        address).
+
+        Each subinstruction is having a unique address across the
+        whole program (not only unique across to other subinstructions
+        of the same instruction) and much like [Theory.Label.for_addr]
+        it is possible to get a label that corresponds to an
+        instruction with the given sequence number using
+        [Seqnum.label].
+
+        The sequence number is represented with an integer to enable
+        address arithemetics. A subinstruction that follows a
+        subinstruction with the sequence number [N] has the sequence
+        number [N+1].
+
+        @since 2.4.0
+    *)
+    module Seqnum : sig
+      type t = int
+
+
+      (** [label seqnum] returns the program label that corresponds
+          to [seqnum].  *)
+      val label : ?package:string -> t -> Theory.Label.t KB.t
+
+      (** [slot] for accessing the sequence number of a subinstruction.  *)
+      val slot : (Theory.program, t option) KB.slot
+
+
+      (** [fresh] evaluates to a freshly generated sequence number.
+
+          @since 2.5.0  *)
+      val fresh : tid knowledge
+    end
+
 
     (** {3 Prefix Tree}
         This module provides a trie data structure where a sequence of
@@ -7546,7 +7715,6 @@ module Std : sig
       *)
       val subroutines : state -> Set.M(Addr).t
 
-
       (** [blocks state] is the set of addresses of instructions that
           start basic blocks.
           @since 2.2.0
@@ -7604,7 +7772,6 @@ module Std : sig
           @since 2.2.0 *)
       val is_barrier : jump -> bool
     end
-
 
     (** A set of subroutines.
 
@@ -7737,6 +7904,13 @@ module Std : sig
     (** empty symbol table  *)
     val empty : t
 
+    (** [create disasm calls] creates the symbol table given the
+        disassembly state [disasm] and callgraph [calls].
+
+        @since 2.6.0
+    *)
+    val create : Disasm.Driver.state -> Disasm.Subroutines.t -> t KB.t
+
     (** [add_symbol table name entry blocks] extends [table] with a
         new symbol with a given [name], [entry] block and body
         [blocks].  *)
@@ -7745,7 +7919,7 @@ module Std : sig
     (** [remove table fn] removes symbol [fn] from [table]  *)
     val remove : t -> fn -> t
 
-    (** [find_by_name symbols name] finds a symbol with a given namem  *)
+    (** [find_by_name symbols name] finds a symbol with a given name.  *)
     val find_by_name  : t -> string -> fn option
 
     (** [find_by_start symbols addr] finds a symbol that starts from
@@ -7769,6 +7943,13 @@ module Std : sig
     (** [span fn] returns a memory map of a region occupied by a
         function [fn] *)
     val span : fn -> unit memmap
+
+    (** [callee symtab address] returns a callee which is
+        called from a block with the given [address].
+
+        @since 2.5.0
+    *)
+    val callee : t -> addr -> string option
   end
 
   type lifter = mem -> Disasm_expert.Basic.full_insn -> bil Or_error.t
@@ -7963,6 +8144,151 @@ module Std : sig
     include Regular.S with type t := t
   end
 
+  (** Live Variables.
+
+      Computes the set of live variables for each block in a
+      subroutine, taking into account subroutine arguments.
+
+      A variable [v] is {i live} at a program point [x] if there exists a
+      path from [x] to a use of [v] that doesn't go through a
+      definition of [v].
+
+      This module computes liveness on the block granularity, which
+      gives rise to the following notions.
+
+      A variable is {i live-in} at a basic block [x] if it is live at the
+      begining of the block [x].
+
+      A variable is {i live-out} at a basic block [x] if it is live on
+      any of the outcoming edges of [x].
+
+      A variable is {i live-through} at a basic block [x] if it is
+      both live-in and live-out at it.
+
+      {3 Liveness in the SSA form}
+
+      The algorithm works with the SSA form. From the perspective of
+      liveness, the phi-nodes define their right-hand sides on the
+      edges incoming from the corresponding blocks. More formally, for
+      a phi-node at block [b0], [x0 := phi([b1,x1; b2,x2;...;bN,xN])],
+      the defined variable [x0] is considered to be defined at blocks
+      [bi] and the variable [xi] live-out of basic block [bi], for
+      [0 < i <= N].
+
+      Intuitively, this can be visualized as if the following program,
+
+      {v
+
+        b1:
+        x.1 := 1
+        goto b3
+
+        b2:
+        x.2 := 2
+        goto b3
+
+        b3:
+        x.3 <- phi([b1,x1]; [b2, x2])
+        ...
+      v}
+
+      is rewritten to an equivalent (but not in SSA) program,
+
+      {v
+
+        b1:
+        x.1 := 1
+        x.3 := x1
+        goto b3
+
+        b2:
+        x.2 := 2
+        x.3 := x2
+        goto b3
+
+        b3:
+        ...
+      v}
+
+      That means that a variable defined by a phi-node in a block [x]
+      could be live-in at the block [x].
+
+      The {!Live.defs} and {!Live.uses} includes the variables from
+      the corresponding phi-nodes, e.g., [Live.defs b1] will is
+      [{x1,x3}] and [Live.uses b1] is [{x1}].
+
+      @since 2.5.0
+      @before 2.5.0 see {!Sub.compute_liveness}  *)
+  module Live : sig
+    type t
+
+    (** [compute sub] computes the subroutine liveness information.
+
+        Variables specified by [keep] will be kept live at the exit
+        from the function. In addition to the variables in [keep],
+        all free variables used by in and in/out arguments of the
+        subroutine will be kept alive at the exit.*)
+    val compute : ?keep:Var.Set.t -> sub term -> t
+
+    (** [vars live] the variables that are live in the subroutine.
+
+        The set of variables that are live-in on the entry block of
+        the subroutine that was used to compute [live]. The live
+        variables of the subroutine also called free variables or
+        upper-exposed variables. They may be used in the subroutine
+        before they are assigned. *)
+    val vars : t -> Var.Set.t
+
+    (** [ins live blk] the set of live-in variables at [blk].
+
+        The set of variables that are live at the entry to the basic
+        block [blk].
+
+        Returns an empty set if [blk] doesn't belong to the [sub] graph.
+    *)
+    val ins : t -> tid -> Var.Set.t
+
+    (** [outs live blk] the set of live-outs variables at [blk].
+
+        The set of variables that are live at the exist from the basic
+        block [blk].
+
+        Returns an empty set if [blk] doesn't belong to the [sub] graph.*)
+    val outs : t -> tid -> Var.Set.t
+
+    (** [blks live var] the set of blks where [var] is live-in. *)
+    val blks : t -> var -> Set.M(Tid).t
+
+    (** [defs live blk] the set of variables defined by [blk].
+
+        Aka the {i KILL} set, i.e., the set of variables whose
+        liveness is killed in the block [blk].    *)
+    val defs : t -> tid -> Var.Set.t
+
+    (** [uses live blk] the set of variables used by [blk].
+
+        Aka the {i GEN} set, i.e., the set of variables generated by
+        the block [blk].    *)
+    val uses : t -> tid -> Var.Set.t
+
+    (** [fold live ~init ~f] folds over live-ins of blocks.
+
+        Applies [f] to live-in set of variables of each block of the
+        subroutine.
+
+        Note, pseudo start and exit nodes are not folded over. *)
+    val fold : t -> init:'a -> f:('a -> tid -> Var.Set.t -> 'a) -> 'a
+
+    (** [solution live] returns the fixed point solution.
+
+        The solution is the mapping from blocks to their live-outs.*)
+    val solution : t -> (tid, Var.Set.t) Solution.t
+
+
+    (** [pp ppf live] prints the live-in sets of each basic block.  *)
+    val pp : Format.formatter -> t -> unit
+  end
+
   (** IR language term.
 
       Term is a building block of the
@@ -8125,6 +8451,32 @@ module Std : sig
     (** [nth_exn t p n] same as [nth], but raises exception if [n] is
         not a valid position number.  *)
     val nth_exn : ('a,'b) cls -> 'a t -> int -> 'b t
+
+    (** @since 2.6.0 *)
+    module KB : sig
+      (** [map t p ~f] returns term [p] with all subterms of type [t]
+          mapped with function [f].
+
+          @since 2.6.0
+      *)
+      val map : ('a,'b) cls -> 'a t -> f:('b t -> 'b t knowledge) -> 'a t knowledge
+
+      (** [filter_map t p ~f] returns term [p] with all subterms of type
+          [t] filter_mapped with function [f], i.e., all terms for which
+          function [f] returned [Some thing] are substituted by the
+          [thing], otherwise they're removed from the parent term.
+
+          @since 2.6.0
+      *)
+      val filter_map : ('a,'b) cls -> 'a t -> f:('b t -> 'b t option knowledge) -> 'a t knowledge
+
+      (** [filter t p ~f] returns a term [p] with subterms [c] for which
+          [f c = false] removed.
+
+          @since 2.6.0
+      *)
+      val filter : ('a,'b) cls -> 'a t -> f:('b t -> bool knowledge) -> 'a t knowledge
+    end
 
     (** {2 Attributes}
 
@@ -8311,7 +8663,7 @@ module Std : sig
         Creates a program from the given subs. If [tid] is not
         specified then a fresh tid is generated.
 
-        @since 2.3.0 has the optional [subs] paramater.
+        @since 2.3.0 has the optional [subs] parameter.
     *)
     val create : ?subs:sub term list -> ?tid:tid -> unit -> t
 
@@ -8346,6 +8698,16 @@ module Std : sig
       val result : t -> program term
     end
 
+    (** @since 2.6.0 *)
+    module KB : sig
+      (** [lift symbols] takes a table of functions and return a whole
+          program lifted into IR.
+
+          @since 2.6.0
+      *)
+      val lift : symtab -> program term knowledge
+    end
+
     (** [pp_slots names] prints slots that are in [names].  *)
     val pp_slots : string list -> Format.formatter -> t -> unit
     include Regular.S with type t := t
@@ -8354,7 +8716,12 @@ module Std : sig
   (** Subroutine.  *)
   module Sub : sig
     (** Subroutine is a set of blocks.  The first block of a function is
-        considered an entry block.  *)
+        considered an entry block.
+
+        @since 2.6.0 subroutines with duplicate names in a program are no
+        longer mangled every time the program is updated. It is done only
+        once when the program is lifted (see [Program.lift]).
+    *)
     type t = sub term
 
     (** [create ?name ()] creates a new subroutine.
@@ -8452,9 +8819,25 @@ module Std : sig
         whole subroutine is the set of variables that are live at the
         [Graphs.Tid.start] node.
 
+        When the subroutine is in the SSA form then the phi-nodes have
+        the following semantics.
+
+        Informally, a phi-node defines the values on the corresponding
+        edges of the predecessors.
+
         @since 2.1
+        @since 2.5.0 supports SSA
+        @before 2.5.0 the subroutine must not be in the SSA form
     *)
     val compute_liveness : t -> (tid, Var.Set.t) Solution.t
+    [@@deprecated "[since 2022-03] use Live.compute"]
+
+    (** [flatten sub] returns [sub] in flattened form in which all
+        operands are trivial.
+        @see Blk.flatten for more information about flattening.
+
+        @since 2.5.0 *)
+    val flatten : t -> t
 
     (** other names for the given subroutine.*)
     val aliases : string list tag
@@ -8504,6 +8887,12 @@ module Std : sig
     (** a subroutine is the binary entry point *)
     val entry_point : unit tag
 
+    (** a subroutine is an intrinisic or special instruction
+        not a real subroutine.
+
+        @since 2.5.0 *)
+    val intrinsic : unit tag
+
     (** Subroutine builder *)
     module Builder : sig
       type t
@@ -8520,6 +8909,36 @@ module Std : sig
 
       (** returns current result  *)
       val result : t -> sub term
+    end
+
+    (** @since 2.6.0 *)
+    module KB : sig
+      (** [lift entry] takes an basic block of assembler instructions,
+          as an entry and lifts it to the subroutine term.
+
+          @since 2.6.0
+      *)
+      val lift : block -> cfg -> sub term knowledge
+
+      (** [ssa sub] returns [sub] in SSA form. If program is already in
+          SSA, then do nothing (see also {!is_ssa}). The underlying
+          algorithm produces a semi-pruned SSA form. To represent
+          different versions of the same variable we use {{!Var}variable
+          versions}. Any definition of a variable increases its version
+          number. So, the zero version is reserved for variables that
+          weren't defined before the first use.
+
+          @since 2.6.0
+      *)
+      val ssa : t -> t knowledge
+
+      (** [flatten sub] returns [sub] in flattened form in which all
+          operands are trivial.
+          @see Blk.KB.flatten for more information about flattening.
+
+          @since 2.6.0
+      *)
+      val flatten : t -> t knowledge
     end
 
     (** [pp_slots names] prints slots that are in [names].  *)
@@ -9020,6 +9439,22 @@ module Std : sig
         [def] in [blk].  *)
     val occurs : t -> after:tid -> tid -> bool
 
+    (** [flatten blk] translates [blk] into the flattened form.
+        In the flattened form, all operations are applied to variables,
+        constants, or unknowns, i.e., the operands could not be compound
+        expressions. E.g.,
+        {v
+           #10 := 11 * (#9 + 13) - 17
+        v}
+        is translated to,
+        {v
+           #11 := #9 + 13
+           #12 := 11 * #11
+           #10 := #12 - 17
+        v}
+        @since 2.5.0 *)
+    val flatten : t -> t
+
     (** Builder interface.  *)
     module Builder : sig
       (** This interface provides an efficient way to build new
@@ -9064,6 +9499,78 @@ module Std : sig
 
       (** returns current result  *)
       val result  : t -> blk term
+    end
+
+    module KB : sig
+      (** [lift block] takes a basic block of assembly instructions and
+          lifts it to a list of blk terms. The first term in the list
+          is the entry.
+
+          @since 2.6.0
+      *)
+      val lift : cfg -> block -> blk term list knowledge
+
+      (** [from_insn ?addr insn] creates an IR representation of a single
+          machine instruction [insn].
+
+          Uses the [Term.slot] to get the IR representation of an
+          instruction, trying to keep the number of basic blocks minimal
+          (by coalescing adjacent data operations).
+
+          If [addr] is specified then the term identifier of the first
+          block will be specific to that address and the [address]
+          attribute will be set to the passed value.
+
+          @since 2.6.0
+      *)
+      val from_insn : ?addr:addr -> insn -> blk term list knowledge
+
+      (** [from_insns block] translates a basic block of instructions
+          into IR.
+
+          Takes a list of instructions in the execution order and
+          translates them into a list of IR blks that are properly
+          connected. The instructions shall belong to a single basic
+          block.
+
+          The first element of the result is the entry block. If [addr]
+          is set then it will have the term identifier equal to
+          [Term.for_addr addr] and the [address] attribute will be set to
+          [addr].
+
+          The [fall] parameter designates the fallthrough destination of
+          the basic block. The destination could be either
+          interprocedural ([`Inter]) or intraprocedural ([`Intra]). In
+          the latter case it will be reified into a jump of the call
+          kind. If the last instruction (the basic block terminator) is a
+          barrier [Insn.(is barrier) is [true]], then the [fall]
+          destination is ignored, even if set.
+
+          @since 2.6.0
+      *)
+      val from_insns :
+        ?fall:[`Inter of Jmp.dst | `Intra of Jmp.dst ] ->
+        ?addr:addr ->
+        insn list ->
+        blk term list knowledge
+
+      (** [flatten blk] translates [blk] into the flattened form.
+          In the flattened form, all operations are applied to variables,
+          constants, or unknowns, i.e., the operands could not be compound
+          expressions. E.g.,
+          {v
+           #10 := 11 * (#9 + 13) - 17
+          v}
+          is translated to,
+          {v
+           #11 := #9 + 13
+           #12 := 11 * #11
+           #10 := #12 - 17
+          v}
+
+          @since 2.6.0
+      *)
+      val flatten : t -> t knowledge
     end
 
     (** [pp_slots names] prints slots that are in [names].  *)
@@ -9864,12 +10371,12 @@ module Std : sig
     type t = project
     type state [@@deriving bin_io]
     type input
+    type library
 
     (** IO interface to a project data structure.  *)
     include Data.S with type t := t
 
-    (** [from_file filename] creates a project from the provided input
-        source.
+    (** [create input] creates a project from the provided input source.
 
         The input code regions are speculatively disassembled and the
         set of basic blocks is determined, using the algorithm
@@ -9967,8 +10474,13 @@ module Std : sig
         @since 2.0.0 the parameter [symbolizer] is unused
         @since 2.0.0 the parameter [rooter] is unused
         @since 2.0.0 the parameter [reconstructor] is unused
-        @since 2.2.0 the package parameter is added
+        @since 2.2.0 the parameter [package] is added
 
+        @since 2.6.0 if [input] consists of library files in addition
+        to the main binary, then the accessors to the state of the
+        project reflect that of the main binary, except for [program],
+        which contains the code of both the main program and the library
+        programs linked together.
     *)
     val create :
       ?package:string ->
@@ -9990,13 +10502,11 @@ module Std : sig
     *)
     val arch : t -> arch
 
-
     (** [target project] returns the target system of the project.
 
         @since 2.2.0
     *)
     val target : t -> Theory.Target.t
-
 
     (** [specification p] returns the specification of the binary.
 
@@ -10007,7 +10517,6 @@ module Std : sig
 
         @since 2.0.0 *)
     val state : t -> state
-
     (** [disasm project] returns results of disassembling  *)
     val disasm : t -> disasm
 
@@ -10021,10 +10530,7 @@ module Std : sig
     (** [map_program t ~f] maps the IR representation of the program
         with function [f].
 
-        Note: since the program is computed lazily this function
-        should be preferred to [program] composed [with_program] for
-        passes that transform the program representation so that they
-        are not run if the program is never ever used.
+        @since 2.6.0 the program is no longer lazily computed.
     *)
     val map_program : t -> f:(program term -> program term) -> t
 
@@ -10116,6 +10622,58 @@ module Std : sig
     (** [del project attr] removes an attribute from a project *)
     val del : t -> 'a tag -> t
 
+    (** [libraries project] returns the shared libraries that were loaded
+        with [project]. *)
+    val libraries : t -> library list
+
+    (** A library that was loaded alongside the main program.
+
+        @since 2.6.0
+    *)
+    module Library : sig
+      type t = library
+
+      (** [unit library] returns the unit associated with the library. *)
+      val unit : library -> Theory.Unit.t
+
+      (** [arch library] reveals the architecture of the library.
+
+          @since 2.6.0
+          @deprecated use [target library] instead.
+      *)
+      val arch : library -> arch
+
+      (** [target library] returns the target system of the library.
+
+          @since 2.6.0
+      *)
+      val target : library -> Theory.Target.t
+
+      (** [specification library] returns the specification of the library.
+
+          @since 2.6.0
+      *)
+      val specification : library -> Ogre.doc
+
+      (** [state library] returns the core state of the library.
+
+          @since 2.6.0
+      *)
+      val state : library -> state
+
+      (** [disasm library] returns the results of disassembling the library.
+
+          @since 2.6.0
+      *)
+      val disasm : library -> disasm
+
+      (** [memory library] returns the memory of the library.
+
+          @since 2.6.0
+      *)
+      val memory : library -> value memmap
+    end
+
     (** Information obtained during project reconstruction.
 
         These pieces of information are guaranteed to be discovered
@@ -10196,13 +10754,28 @@ module Std : sig
           and the information from the is merged, otherwise only the
           selected loaded is used. See {!Image.available_backend}.
 
-          The [target] could be used to specialize the target
-          information retrieved from the file. If it is less specific,
-          then it will be ignored, if it contradicts the information
-          in the file then the project creation will fail.
+          The [target] could be used to override the target
+          information derived from the input file.
+
+          @since 2.5.0 if [target] is specified then it is used
+          instead of the derived target, and the derivation itself is
+          not performed.
+
+          @before 2.5.0 if [target] is specified and is less specific,
+          then the derived target it will be ignored, if it
+          contradicts the information in the file then the project
+          creation will fail.
+
+          @since 2.6.0 a list of files [libraries] can be provided,
+          which are libraries that will be linked with the main program.
+          It is presumed that they are specified in topological order.
 
           @since 2.2.0 *)
-      val load : ?target:Theory.Target.t -> ?loader:string -> string -> t
+      val load :
+        ?target:Theory.Target.t ->
+        ?loader:string ->
+        ?libraries:string list ->
+        string -> t
 
       (** [raw_file ?base target ~filename] creates an input from a binary
           file that is raw code for the given [target], i.e.,
@@ -10285,7 +10858,6 @@ module Std : sig
           be looked up in the {!Image.available_backends}.
 
           @deprecated use [Input.load filename]
-
       *)
       val file : ?loader:string -> filename:string -> t
 
@@ -10294,13 +10866,13 @@ module Std : sig
           the file, and [data] spans the data. An optional [finish]
           function can be used to propagate to the project any
           additional information that is available to the loader. It
-          defaults to [ident].
+          defaults to [Fn.id].
           @deprecated use either [Input.custom] or [Input.from_string]
           and [Input.from_bigstring].
       *)
       val create :
         ?finish:(project -> project) ->
-        arch -> string -> code:value memmap -> data: value memmap -> t
+        arch -> string -> code:value memmap -> data:value memmap -> t
     end
 
     (** {3 Registering passes}
@@ -11042,11 +11614,33 @@ module Std : sig
       (** A witness that can read configured params *)
       type reader = {get : 'a. 'a param -> 'a}
 
+      (** [declare_extension ~features ~provides ~doc when_ready]
+          declares a BAP extension.
+
+          This function is a wrapper for {!Bap_main.Extension.declare}
+          that simplifies transition from the old (this one)
+          configuration system to the modern {!Bap_main.Extension}.
+
+          It acts as {!when_ready} but you can also specify feature
+          tags and documentation, see {!Bap_main.Extension.declare} for more
+          information.
+
+          @since 2.6.0
+      *)
+      val declare_extension :
+        ?features:string list ->
+        ?provides:string list ->
+        ?doc:string ->
+        (reader -> unit) ->
+        unit
+
+
       (** [when_ready f] requests the system to call function [f] once
           configuration parameters are  established and stabilized. An
           access function will be passed to the function [f],  that can be
           used to safely dereference parameters.  *)
       val when_ready : (reader -> unit) -> unit
+      [@@deprecated "[since 2022-09] use declare_extension"]
 
 
       (** The type for a block of man page text.

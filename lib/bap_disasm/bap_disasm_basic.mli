@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Bap_types.Std
 open Bap_core_theory
@@ -101,6 +101,7 @@ module Insn : sig
   val is : ('a,kinds) t -> kind -> bool
   val asm : (asm,'k) t -> string
   val ops  : ('a,'k) t -> op array
+  val subs : ('a,'k) t -> ('a,'k) t array
   val slot : (Theory.program,full_insn option) KB.slot
 end
 

@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 
 open Powerpc_types
@@ -46,14 +46,24 @@ module Std = struct
   let register name lifter =
     Hashtbl.change lifters name ~f:(fun _ -> Some lifter)
 
-  let register_dot name lifter = register name (dot lifter)
+
+  (* see https://reviews.llvm.org/D70758  *)
+  let rename_dot_to_rec old =
+    String.(chop_suffix_exn old ~suffix:"o" ^ "_rec")
+
+
+  let register_dot name lifter =
+    List.iter ~f:(fun name -> register name (dot lifter)) [
+      name;
+      rename_dot_to_rec name;
+    ]
+
 
   let (>|) = register
   let (>.) = register_dot
 
   let lift addr_size endian mem insn =
     let insn = Insn.of_basic insn in
-    let insn_name = Insn.name insn in
     let cpu = make_cpu addr_size endian mem  in
     let lift lifter =
       try
@@ -63,7 +73,7 @@ module Std = struct
       with
       | Failure str -> Error (Error.of_string str) in
     match Hashtbl.find lifters (Insn.name insn) with
-    | None -> Or_error.errorf "unknown instruction %s" insn_name
+    | None -> Ok []
     | Some lifter -> lift lifter
 
   module T32 = struct

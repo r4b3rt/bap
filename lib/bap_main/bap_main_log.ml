@@ -1,10 +1,11 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_future.Std
 open Bap_plugins.Std
 open Format
 
 module Event = Bap_main_event
 module Filename = Caml.Filename
+module Sys = Caml.Sys
 module Unix = Caml_unix
 
 let perm = 0o770
@@ -105,9 +106,6 @@ let log_plugin_events () =
           "Failed to load plugin %S: %a" path Error.pp err
       | `Linking lib ->
         message Debug ~section "Linking library %s" lib)
-
-
-
 
 let process_events ppf =
   Stream.observe Event.stream (function

@@ -1,7 +1,7 @@
 open Bap.Std
 open Bap_primus_types
 open Bap_knowledge
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 
 module Name = Knowledge.Name
 module Info = Bap_primus_info
@@ -39,8 +39,6 @@ type system = t
 module Repository = struct
   let self = Hashtbl.create (module Name)
 
-  exception Not_found
-
   let add sys =
     if Hashtbl.mem self sys.name
     then invalid_argf "System named %s is already present in the repository"
@@ -53,7 +51,7 @@ module Repository = struct
     | None -> invalid_argf "Unknown system %s" (Name.show name) ()
 
   let get ?package name =
-    require @@ Name.create ?package name
+    require @@ Name.read ?package name
 
   let find = Hashtbl.find self
 

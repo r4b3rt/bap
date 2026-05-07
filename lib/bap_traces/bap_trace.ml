@@ -1,6 +1,6 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
-open Result
+open Result.Monad_infix
 open Bap.Std
 
 module Id = Bap_trace_id
@@ -82,7 +82,7 @@ let protos : (module P) Tab.t = mk_tab ()
 let readers: (Uri.t -> id -> (reader, io_error) Result.t) Tab.t = mk_tab ()
 let writers: (Uri.t -> t -> (unit, io_error) Result.t) Tab.t = mk_tab ()
 
-let make_id () = Bap_trace_id.create `V4
+let make_id () = Bap_trace_id.v `V4
 
 let make_error (#error as r) = Error r
 

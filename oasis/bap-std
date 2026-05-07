@@ -17,12 +17,16 @@ Library bap
                    cmdliner,
                    bap-knowledge,
                    bap-core-theory,
+                   bap-relation,
                    graphlib,
                    regular,
                    core_kernel,
                    ppx_bap,
                    monads,
                    bitvec,
+                   bitvec-binprot,
+                   bitvec-order,
+                   bitvec-sexp,
                    ogre,
                    fileutils,
                    core_kernel.caml_unix
@@ -75,7 +79,7 @@ Library types
                    Bap_biri,
                    Bap_biri_types,
                    Bap_bitvector,
-                   Bap_common,
+                   Bap_common_types,
                    Bap_context,
                    Bap_core_theory_bil_parser,
                    Bap_eval,
@@ -115,7 +119,7 @@ Library bap_image
   Build$:        flag(everything) || flag(bap_std)
   FindlibParent: bap
   FindlibName:   image
-  BuildDepends:  bap.types, ogre, mmap, monads, core_kernel, regular,
+  BuildDepends:  bap.types, ogre, mmap, monads, core_kernel, regular, bitvec,
                  bap-core-theory, bap-knowledge, ppx_bap, core_kernel.caml_unix
 
   InternalModules:
@@ -199,5 +203,6 @@ Library sema
                  Bap_sema,
                  Bap_sema_lift,
                  Bap_sema_ssa,
+                 Bap_sema_flatten,
                  Bap_sema_taint,
                  Bap_sema_free_vars

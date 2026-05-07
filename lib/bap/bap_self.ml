@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_bundle.Std
 open Bap_future.Std
 open Bap_plugins.Std
@@ -7,19 +7,15 @@ open Cmdliner
 
 module Event = Bap_main_event
 module Buffer = Caml.Buffer
+module Sys = Caml.Sys
 
 module Create() = struct
-  let bundle = main_bundle ()
-
   let main =
     let base = Filename.basename Sys.executable_name in
     try Filename.chop_extension base with _ -> base
 
 
-  let manifest =
-    try Bundle.manifest bundle
-    with _exn -> Manifest.create main
-
+  let manifest = Manifest.current ()
   let name = Manifest.name manifest
   let version = Manifest.version manifest
   let doc = Manifest.desc manifest
@@ -122,12 +118,14 @@ module Create() = struct
       Configuration.determined
 
     let determined x = x
-    let when_ready f = declare @@ fun _ ->
+    let declare_extension ?features ?provides ?doc f =
+      declare ?features ?provides ?doc @@ fun _ ->
       try Ok (f {get = fun x -> Future.peek_exn x}) with
       | Invalid_argument s -> Error (Error.Invalid s)
       | exn ->
         let backtrace = Caml.Printexc.get_backtrace () in
         Error (Error.Bug (exn,backtrace))
+    let when_ready f = declare_extension f
 
     let manpage (ps : manpage_block list) =
       let open Format in

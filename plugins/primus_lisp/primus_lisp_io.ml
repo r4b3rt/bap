@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Bap_primus.Std
@@ -18,7 +18,7 @@ type state = {
 let default_channels = Int.Map.of_alist_exn [
     0, {
       input = Some In_channel.stdin;
-      output = None;
+      output = Some Out_channel.stdout;
     };
     1, {
       input = None;

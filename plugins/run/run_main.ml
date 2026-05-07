@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_knowledge
 open Bap_core_theory
 open Bap.Std
@@ -309,7 +309,6 @@ let find_first_unvisited_blk prog =
 
 let main {Config.get=(!)} proj =
   let open Param in
-  let state = Toplevel.current () in
   let run_until_visited = !until_visited in
   let enqueue_jobs = if !in_isolation
     then enqueue_separate_jobs else enqueue_super_job in
@@ -330,7 +329,8 @@ let main {Config.get=(!)} proj =
           ~args:!argv ~envp:!envp
           ~name:(Primus.Linker.Name.to_string p)
           ~start:(exec p)) in
-  let rec run proj state =
+  let rec run proj =
+    let state = Toplevel.current () in
     let result = Primus.Jobs.run ~on_failure ~on_success proj state in
     let state = Primus.Jobs.knowledge result in
     Toplevel.set state;
@@ -339,23 +339,26 @@ let main {Config.get=(!)} proj =
     if run_until_visited
     then match find_first_unvisited_sub prog with
       | Some sub ->
-        enqueue_term sub; run proj state
+        enqueue_term sub; run proj
       | None -> match find_first_unvisited_blk prog with
         | Some blk ->
           enqueue_term blk;
-          run proj state
+          run proj
         | None -> proj
     else proj in
-  run proj state
+  run proj
 
 let deps = [
   "trivial-condition-form"
 ]
 
 let () =
-  Config.when_ready (fun conf ->
-      Project.register_pass ~deps (main conf);
-      Primus.Machine.add_component (module Visited) [@warning "-D"];
-      Primus.Components.register_generic "records-visited" (module Visited)
-        ~internal:true
-        ~package:"run")
+  Config.declare_extension
+    ~doc:"emulates the program using Primus"
+    ~provides:["pass"; "primus"; "emulator"; "microexecution"]
+    (fun conf ->
+       Project.register_pass ~deps (main conf);
+       Primus.Machine.add_component (module Visited) [@warning "-D"];
+       Primus.Components.register_generic "records-visited" (module Visited)
+         ~internal:true
+         ~package:"run")

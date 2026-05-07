@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 
@@ -15,7 +15,7 @@ let make_regs regs =
   Map.find_exn regs
 
 let gpr = make_regs Target.gpr
-let regnum s = Scanf.sscanf s "R%d" ident
+let regnum s = Scanf.sscanf s "R%d" Fn.id
 
 (** [require_gpr insn n f] parses the machine instruction operands and
     requires that the [n]th register should be a GPR register and if
@@ -49,7 +49,7 @@ module Systemz(CT : Theory.Core) = struct
      packs them into a basic block that has the required type of [unit
      eff].  *)
   let data xs =
-    KB.Object.create Theory.Program.cls >>= fun lbl ->
+    let lbl = KB.Object.null Theory.Program.cls in
     CT.blk lbl (seq xs) (seq [])
 
   let (@) = CT.append r64
@@ -81,7 +81,7 @@ end
 
    The only input parameter is a label that denotes a program
    location, aka a knowledge base object of type
-   core-theory:program. The label is like a generalized address - it
+   core:program. The label is like a generalized address - it
    uniquely identifies a program location, even across modules.
 
    To build the semantics the lifter can access various properties of
@@ -93,7 +93,7 @@ end
    function with other lifters (itself included, of course).
 
    The list of properties of that class  can be obtained using the
-   following command: `bap list classes -f core-theory:program`.
+   following command: `bap list classes -f core:program`.
 
    The return type [unit Theory.eff] is the denotation of effects that
    the instruction performs. The ['a Theory.eff] type is an

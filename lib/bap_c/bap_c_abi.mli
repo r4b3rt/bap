@@ -4,7 +4,7 @@
     modules for C language.
 *)
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Monads.Std
@@ -71,8 +71,36 @@ val create_api_processor : #Bap_c_size.base -> t -> Bap_api.t
 
 (** [data size t] creates an abstraction of data that is represented
     by type [t]. The [size] parameter defines a data model, e.g.,
-    sizes of primitive types, padding and alignment restrictions, etc.*)
+    sizes of primitive types, padding and alignment restrictions, etc.
+
+    The abstraction includes inner and trailing paddings, when
+    necessary. *)
 val data : #Bap_c_size.base -> Bap_c_type.t -> Bap_c_data.t
+
+
+(** [layout size t] computes the c data type layout.
+
+    @since 2.5.0 *)
+val layout : #Bap_c_size.base -> Bap_c_type.t -> Bap_c_data.layout
+
+
+(** [model target] returns the data model for the given target.
+
+    @since 2.5.0  *)
+val model : Theory.Target.t -> Bap_c_size.base
+
+
+(** [apply processor attrs proto sub] applies the abi processor to the
+    subroutine [sub].
+
+    The function inserts arguments and attaches appropriate arguments
+    to the function and its subterms, such as strores the type of each
+    argument, the provided C attributes, stores the prototype, computes
+    and attaches data layouts, etc.
+
+    @since 2.5.0 *)
+val apply : t -> #Bap_c_size.base ->  attr list -> proto -> sub term -> sub term
+
 
 (** [arg_intent t] infers argument intention based on its C type.  If
     an argument is passed by value, i.e., it is a c basic type, then
@@ -85,12 +113,25 @@ val data : #Bap_c_size.base -> Bap_c_type.t -> Bap_c_data.t
 val arg_intent : Bap_c_type.t -> intent
 
 (** [register name t] registers an abi processor [t] named [name] that
-    may be used by subroutines in this project.*)
+    may be used by subroutines in this project.
+
+    @after 2.5.0 fails if there is already a processor for the given [name].
+    @after 2.5.0 the abi name should be a valid target name.
+*)
 val register : string -> t -> unit
+[@@deprecated "[since 2022-07] use the Arg module"]
 
 (** [get_processor name] is used to access an abi processor with its
     name.*)
 val get_processor : string -> t option
+[@@deprecated "[since 2022-07] use [lookup]"]
+
+
+(** [lookup t] the abi processor associated with the target [t].
+
+    @since 2.5.0
+*)
+val lookup : Theory.Target.t -> t option
 
 
 (** An abstraction of a stack, commonly used in C compilers.   *)
@@ -103,11 +144,14 @@ end
 
 (** A monadic eDSL for argument passing semantics specification.
 
+    @since 2.5.0 see also the [Language] module for a higher-level
+    eDSL, built on top of the primitives described below.
+
     This DSL helps in defining the abi processor's [insert_args]
     function. The DSL describes the semantics of argument passing that
     is then reified to the [args] structure. The [DSL] is a choice
     monad that enables describing the argument passing grammar using
-    backtracing when the chosen strategy doesn't fit. The [reject ()]
+    backtracking when the chosen strategy doesn't fit. The [reject ()]
     operator will reject the current computation up until the nearest
     choice prompt, e.g., in the following example, computations [e1],
     [e2], and [e3] are rejected and any side-effects that they might
@@ -225,8 +269,9 @@ end
                arg iargs fargs t));
 
         let () = List.iter ~f:define Bap_risv_target.[riscv32; riscv64]
-
     ]}
+
+    @since 2.3.0
 *)
 module Arg : sig
   type 'a t
@@ -269,8 +314,13 @@ module Arg : sig
       Rejects the computation if [arena] doesn't have the necessary
       number of registers; the number of required registers is greater
       than [limit]; or if the size of [t] is unknown.
+
+      If [rev] is true, then the allocated registers will be used in
+      the reversed order.
+
+      @since 2.5.0 accepts the optional [rev] parameter.
   *)
-  val registers : ?limit:int -> arena -> ctype -> unit t
+  val registers : ?rev:bool -> ?limit:int -> arena -> ctype -> unit t
 
 
   (** [align_even arena] ensures that the first available register in
@@ -292,13 +342,45 @@ module Arg : sig
   *)
   val deplet : arena -> unit t
 
-  (** [reference arena t] passes the argument of type [t] as a pointer
-      to [t] via the first available register in [arena].
+
+  (** [discard arena] discards one location from [arena].
+
+      @param n if specified discards [n] registers instead of one.
+
+      The computation is never rejected, if the arena is empty nothing
+      is changed.
+
+      @since 2.5.0  *)
+  val discard : ?n:int -> arena -> unit t
+
+  (** [reference arena t] passes a hidden pointer to [t] via
+      the first available register in [arena].
 
       Rejects the computation if there are no available registers in
-      [arena] or if the target doesn't have a register with the stack
-      pointer role. The size of [t] is not required. *)
+      [arena]. The size of [t] is not required.
+
+      Note, that [reference] and [hidden] are increasing the number of
+      hidden arguments of a subroutine, but do not add the actual
+      arguments.  *)
   val reference : arena -> ctype -> unit t
+
+
+  (** [pointer arena t] passes argument [t] as a pointer.
+
+      Rejects the computation if [arena] is empty. The size of [t] is
+      not required.
+
+      @since 2.5.0  *)
+  val pointer : arena -> ctype -> unit t
+
+
+  (** [hidden t] inserts a hidden pointer to [t] into the next
+      available stack slot.
+
+      The computation is rejected if the target doesn't have a stack.
+
+      @since 2.5.0  *)
+  val hidden : ctype -> unit t
 
   (** [memory t] passes the argument of type [t] in the next
       available stack slot.
@@ -321,20 +403,46 @@ module Arg : sig
   *)
   val memory : ctype -> unit t
 
+  (** [rebase off] rebases the stack position by [n] words.
+
+      @since 2.5.0
+  *)
+  val rebase : int -> unit t
+
+  (** [split a1 a2 t] passes the lower half of the value
+      via registers in the arena [a1] and the higher via the registers
+      in the arena [a2].
+
+      The compuation is rejected if either arean doesn't have enough
+      registers to pass its half, or if the size of [t] is odd or unknown.
+
+      @since 2.5.0 *)
+  val split : arena -> arena -> ctype -> unit t
+
 
   (** [split_with_memory arena t] passes the low order part of the
-      value in a register (if available) and the rest in the memory.
+      value in a registers (if available) and the rest in the memory.
 
       The size of the part that is passed via the registers is equal
-      to the size of the register. The part that is passed via the
+      to the number of avaliable registers, but not greater than the
+      [limit] (if specified). The part that is passed via the
       stack is aligned to the stack boundary.
+
+      If [rev] is [true] then pass the object in the reversed order.
 
       Rejects the computation if the size of [t] is not known; if
       [arena] is empty; or if some other argument is already passed
       via memory.
 
+      @after 2.5.0 accepts the [rev] parameter.
+      @after 2.5.0 accepts the [limit] parameter.
+
+      @after 2.5.0 passes as much as possible (up to the limit) of the
+      object via registers.
+
+      @before 2.5.0 was passing at most one word via registers.
   *)
-  val split_with_memory : arena -> ctype -> unit t
+  val split_with_memory : ?rev:bool -> ?limit:int -> arena -> ctype -> unit t
 
 
   (** [push t] pushes the argument of type [t] via stack.
@@ -361,6 +469,20 @@ module Arg : sig
   *)
   val count : arena -> ctype -> int option t
 
+
+  (** [size t] is the size in bits of an object of type [t].
+
+      The computation is rejected if the size is unknown, i.e., the
+      type is incomplete.
+
+      @since 2.5.0 *)
+  val size : ctype -> int t
+
+  (** [require cnd] rejects the computation if [cnd] doesn't hold.
+
+      @since 2.5.0  *)
+  val require : bool -> unit t
+
   (** [either option1 option2] tries to pass using [option1] and
       if it is rejected uses [option2].
 
@@ -373,9 +495,210 @@ module Arg : sig
 
 
   (** [choice [o1 o2 ... oN]] tries options in order until the first
-      one that is not rejected.
-  *)
+      one that is not rejected.  *)
   val choice : 'a t list -> 'a t
+
+  (**  A high-level ABI-specification language.
+
+       This module makes it easier to describe various calling
+       conventions using high-level combinators, built on top
+       of the lower level primitives of the [Arg] language.
+
+       The idea is that you can open [Arg.Language] and have all
+       combinators available in the scope. To enable language
+       extension, we also provide the versioned modules,
+       [Arg.Language.V1], and so on. Every extension of the language,
+       i.e., an addition of a new operator or combinator, will
+       go into a separate module, so that if you are using
+       [Arg.Language.Vx] it is guaranteed that the language changes
+       will not break anything.
+
+
+       In [Arg.Language] we describe calling conventions declaratively
+       using a list of commands, where each command is a guarded
+       statement, i.e., a pair of a predicate and the statement. The
+       statement is using the [Arg] operators to describe argument
+       passing routine, and the predicate checks if this is applicable
+       to the given arguement. Various combinators combine commands
+       and predicates, into a final statement that fully describes the
+       argument passing procedure for the given subroutine.
+
+       @since 2.5.0
+  *)
+  module Language : sig
+
+    type predicate = ctype -> bool
+    type statement = ctype -> unit t
+    type predicates = predicate list
+    type statements = statement list
+    type command = predicate * statement
+    type commands = command list
+    type 'a cls = [>] as 'a
+
+    module type V1 = sig
+
+      (** [install target data_model specification]
+
+          The toplevel function that is used to install the calling
+          convention for the given target.  The general syntax follows
+          this structure,
+
+          {[
+            describe t data @@ fun declare ->
+            let* arena1 = <arena-specification> in
+            let* arenaN = <arena-specification> in
+            let return ~alignment x = <statement> in
+            let arg ~alignment x = <statement> in
+            let finish = <finalization-procedure> in
+            let* () = <initialization-procedure> in
+            declare ~finish ~return arg
+          ]}
+
+          For example, the following specification describes ARM
+          calling convention AAPCS32,
+
+          {[
+            let define t =
+              install t model @@ fun describe ->
+              let* iargs = Arg.Arena.iargs t in
+              let* irets = Arg.Arena.irets t in
+              let rev = Theory.Endianness.(Theory.Target.endianness t = le) in
+              let return ~alignment:_ size = select [
+                  C.Type.is_basic, select [
+                    is (size <= 32 * 2), Arg.registers ~rev  irets;
+                    otherwise, Arg.reference iargs;
+                  ];
+                  is (size <= 32), Arg.register irets;
+                  otherwise, Arg.reference iargs;
+                ] in
+              describe ~return @@ fun ~alignment _ ->
+              sequence [
+                is (alignment = 64), const (Arg.align_even iargs);
+                always, choose [
+                  Arg.split_with_memory ~rev iargs;
+                  Arg.memory
+                ];
+              ]
+          ]}
+      *)
+      val install : Theory.Target.t -> #Bap_c_size.base ->
+        ((?finish:(unit t) ->
+          return:(alignment:int -> int -> statement) ->
+          (alignment:int -> int -> statement) -> unit t) ->
+         unit t) ->
+        unit
+
+
+      (** [sequence cmd] executes a sequence of predicated statements.
+
+          Executes all commands in the specified order. A command's
+          statement is executed if the commands predicate is evaluates
+          to [true]. Otherwise the statement is skipped.
+
+          If an evaluated statement rejects a computation then the
+          whole sequence will be rejected. *)
+      val sequence : commands -> statement
+
+      (** [select t spec] selects the first applicable option to pass [t].
+
+          The form,
+          {[
+            select [
+              pred1, option1;
+              pred2, option2;
+              ...,...;
+              predN, optionN;
+            ]
+          ]}
+
+          Tries [pred1 arg], [pred2 arg], ..., [predN arg] in order until
+          the first one that returns [true] and uses the corresponding
+          option to pass the argument.
+
+          The computation is rejected if either the selected option
+          rejects the computation or none options were selected. *)
+      val select : commands -> statement
+
+      (** [case classifer commands] case analysis.
+
+          The case combinator first classfies the argument using the
+          [classfier] function, which shall return a polymoprhic
+          variant, and then selects a command that matches the
+          selected class.
+
+          Rejects the computation if there's no matching class.
+      *)
+      val case : (ctype -> 'a cls t) -> ('a cls * statement) list -> statement
+
+      (** [any ps] holds if any of [ps] holds. *)
+      val any : predicates -> predicate
+
+      (** [all ps] holds if all of [ps] hold.*)
+      val all : predicates -> predicate
+
+      (** [neither ps] holds if neither of [ps] hold. *)
+      val neither : predicates -> predicate
+
+
+      (** [is cnd] holds if [cnd] holds.
+
+          Example, {[[
+            is (size > 64), memory;
+            otherwise, registers;
+
+          ]]}
+      *)
+      val is : bool -> predicate
+
+      (** [otherwise] is a predicate that is always [true].
+
+          I.e., it is [is true].
+
+          This predicate is supposed to be used with the [select]
+          combinator as the last, catch-all, predicate, e.g.,
+
+          {[
+            select arg [
+              is_fundamental, pass_fundamental;
+              is_floating, pass_floating;
+              otherwise, pass_memory;
+            ]
+          ]} *)
+      val otherwise : predicate
+
+      (** [always] is a predicate that is always [true], i.e., [is true].  *)
+      val always : predicate
+
+      (** [never] is a predicate that never holds, i.e., [is false].  *)
+      val never : predicate
+
+      (** [choose options] tries options in order until the first on that
+          is not rejected.
+
+          This combinator is like [choice] but is supposed to be used
+          inside [select], e.g.,
+
+          {[
+            select arg [
+              p1, choose [o1, o2];
+              either [p2; p3], choose [o3,o4];
+            ]
+          ]} *)
+      val choose : statements -> statement
+
+      (** [combine xs] combines statements into a signle statement.
+
+          Evaluates statements in the order they are specified. If any
+          of the statements rejects then the whole statement will be
+          rejected. *)
+      val combine : statements -> statement
+
+      include Monad.Syntax.S with type 'a t := 'a t
+      include Monad.Syntax.Let.S with type 'a t := 'a t
+
+    end
+    include V1
+  end
 
 
   (** [reify t size args] compiles the argument passing specification.
@@ -386,27 +709,29 @@ module Arg : sig
   *)
   val reify : Theory.Target.t -> #Bap_c_size.base -> semantics t -> args option
 
+
+
   include Monad.S with type 'a t := 'a t
   include Monad.Choice.S with type 'a t := 'a t
 
 
-  (** An ordered collection of registers.
+  (** An ordered collection of locations.
 
-      Arena is an expendable collection of registers that is used to
-      pass arguments. Passing an argument via the register consumes
-      it so it is no longer available in the same computation.
+      Arena is an expendable collection of data locations (usually
+      registers) that are used to pass arguments. Passing an argument
+      via an arena location consumes it so it is no longer available in the
+      same computation.
 
-      If a computation that used a register is later rejected then the
+      If a computation that used an arena location is later rejected then the
       register is available again (the same as with any other
       side-effects of a rejected compuation).
 
-      The order of registers in arena, as well as their numbering
+      The order of locations in arena, as well as their numbering
       according to that order, usually matters. Many targets have
-      registers with the alphabetic orders of registers matching
-      their arena orders (with notable exception of x86) that enables
-      the direct usage of the [Theory.Target.regs] function to create
-      arenas.
-  *)
+      registers with the alphabetic orders of registers matching their
+      arena orders (with notable exception of x86) that enables the
+      direct usage of the [Theory.Target.regs] function to create
+      arenas.  *)
   module Arena : sig
 
     (** [create regs] creates an arena from the ordered list of registers.
@@ -415,6 +740,15 @@ module Arg : sig
         empty. The registers will be used in the order of their
         appereance in the [regs] list. *)
     val create : _ Theory.Var.t list -> arena t
+
+    (** [of_exps xs] creates an arena from the ordered list of expressions.
+
+        The expressions must have the same type and the list could be
+        empty. The locations will be used in the order in which they
+        were specified.
+
+        @since 2.5.0 *)
+    val of_exps : exp list -> arena t
 
     (** [of_roles t roles] creates an arena from registers of the
         specified roles.

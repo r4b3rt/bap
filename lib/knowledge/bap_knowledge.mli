@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Monads.Std
 
 
@@ -164,6 +164,16 @@ module Knowledge : sig
       value of the property domain is returned as the result.  *)
   val collect : ('a,'p) slot -> 'a obj -> 'p t
 
+  (** [require p x] collects the property [p] and fails if it is empty.
+
+      When [require p x] fails in the scope of a {!promise},
+      {!proposal}, or in the scope of [with_empty], then the scoped
+      computation immediately returns the empty value.
+
+      @since 2.4.0
+  *)
+  val require : ('a,'p) slot -> 'a obj -> 'p t
+
 
   (** [resolve p x] resolves the multi-opinion property [p]
 
@@ -186,6 +196,7 @@ module Knowledge : sig
       then [provide p x v] diverges into a conflict.
   *)
   val provide : ('a,'p) slot -> 'a obj -> 'p -> unit t
+
   (** [suggest a p x v] suggests [v] as the value for the property [p].
 
       The same as [provide] except the provided value is predicated by
@@ -195,18 +206,21 @@ module Knowledge : sig
 
   (** [promise p f] promises to compute the property [p].
 
-      If no knowledge exists about the property [p] of
-      an object [x], then [f x] is invoked to provide an
-      initial value.
+      If the property [p] of [x] is not provided, then [f x] is
+      invoked to provide the initial value, when [p] is collected.
 
       If there are more than one promises, then they all must
       provide a consistent answer. The function [f] may refer
       to the property [p] directly or indirectly. In that case
       the least fixed point solution of all functions [g] involved
       in the property computation is computed.
+
+      @since 2.4.0 if [require] is called in the scope of the promise
+      and fails, the the whole promise immediately returns the empty
+      value of the property domain, i.e., [f] is wrapped into
+      [with_empty].
   *)
   val promise : ('a,'p) slot -> ('a obj -> 'p t) -> unit
-
 
   (** [promising p ~promise f] evaluates [f ()] under [promise] and
       retracts it after [f] is evaluated.
@@ -215,6 +229,12 @@ module Knowledge : sig
       evaluation of [f ()].
 
       @since 2.2.0
+
+
+      @since 2.4.0 if [require] is called in the scope of the promise
+      and fails, the the whole promise immediately returns the empty
+      value of the property domain, i.e., [promise] (not [f]) wrapped
+      into [with_empty].
   *)
   val promising : ('a,'p) slot -> promise:('a obj -> 'p t) ->
     (unit -> 's t) -> 's t
@@ -223,6 +243,12 @@ module Knowledge : sig
 
       The same as [promise] except that it promises a value for
       an opinion-based property.
+
+      @since 2.4.0 if [require] is called in the scope of the promise
+      and fails, the the whole promise immediately returns the empty
+      value of the property domain, i.e., [f] is wrapped into
+      [with_empty].
+
   *)
   val propose : agent -> ('a, 'p opinions) slot -> ('a obj -> 'p t) -> unit
 
@@ -233,9 +259,106 @@ module Knowledge : sig
       value for an opinion-based property.
 
       @since 2.2.0
+
+      @since 2.4.0 if [require] are called in the scope of the proposal
+      and fails, the the whole proposal immediately returns the empty
+      value of the property domain, i.e., [propose] (not [f]) wrapped
+      into [with_empty].
+
   *)
   val proposing : agent -> ('a, 'p opinions) slot ->
     propose:('a obj -> 'p t) -> (unit -> 's t) -> 's t
+
+  (** [observe property push] calls [push] when the [property] changes.
+
+      Dual to [promise], [observe] enables forward-chaining rules and
+      propagates knowledge whenever [property] value is refined.
+
+      Calls [push x v] when the [property] value of an object [x] is
+      refined to [v]. It is guaranteed that [v] is never empty.
+
+      @since 2.4.0
+  *)
+  val observe : ('a,'p) slot -> ('a obj -> 'p -> unit knowledge) -> unit
+
+  (** [observing property ~observe:push scope] observes the property in a [scope].
+
+      This operation is dual to [promising] and it observes the
+      property only during the time when the [scope] computation is
+      evaluate and removes the observer after that.
+
+      @since 2.4.0
+
+  *)
+  val observing : ('a,'p) slot -> observe:('a obj -> 'p -> unit knowledge) ->
+    (unit -> 'r knowledge) -> 'r knowledge
+
+  (** [with_empty ~missing f x] evaluates [f ()] and if it fails on an empty
+      immediately evaluates to [return missing].
+
+      Inside of [with_empty] it is possible to use the choice monad
+      operations, like [reject], [guard], [on], and [unless], in
+      addition to the knowledge specialized choice operators, such
+      as [require] and various [*?] operators.
+
+      Note, that promised computations are invoked in the [with_empty]
+      scope.
+
+      @since 2.4.0
+  *)
+  val with_empty : missing:'r -> (unit -> 'r knowledge) -> 'r knowledge
+
+
+  (** [reject ()] rejects a promised computation.
+
+      When in the scope of the [with_empty] function, e.g., in a
+      promise or proposal, aborts the computation of the promise
+      and immediately returns an empty value.
+
+      @since 2.5.0 *)
+  val reject : unit -> 'a t
+
+  (** [guard cnd] rejects the rest of compuation if [cnd] is [false].
+
+      When in the scope of the [with_empty] function, e.g., in a
+      promise or proposal, aborts the computation of the promise
+      and immediately returns an empty value.
+
+      @since 2.5.0
+  *)
+  val guard : bool -> unit t
+
+
+  (** [proceed ~unless:cnd] rejects the computation unless [cnd] holds.
+
+      Dual to {!guard}, this operator rejects a promise (or any other
+      computation in the scope of the {!with_empty} operator) unless
+      the [cnd] holds, i.e., it is the same as [guard (not cnd)].
+
+      @since 2.5.0 *)
+  val proceed : unless:bool -> unit t
+
+
+  (** [on cnd x] evaluates to [x] if [cnd], otherwise rejects.
+
+      When in the scope of the [with_empty] function, e.g., in a
+      promise or proposal, aborts the computation of the promise
+      and immediately returns an empty value if [cnd] is [false].
+      If it is not, then evaluates to [x].
+
+      @since 2.5.0  *)
+  val on : bool -> unit t -> unit t
+
+  (** [unless cnd x] evaluates to [x] if [not cnd], otherwise rejects.
+
+      When in the scope of the [with_empty] function, e.g., in a
+      promise or proposal, aborts the computation of the promise
+      and immediately returns an empty value if [cnd] is [true].
+      If it is [false], then evaluates to [x].
+
+      @since 2.5.0  *)
+  val unless : bool -> unit t -> unit t
+
 
   (** state with no knowledge  *)
   val empty : state
@@ -256,6 +379,57 @@ module Knowledge : sig
       @since 2.2.0
   *)
   val save : state -> string -> unit
+
+
+  (** Context variables.
+
+      Context variables could be used to implement stateful
+      analyses. They are not part of the knowledge base per se, but
+      enable convience that is otherwise achieavable through adding a
+      state to the knowledge monad using a monad transformer.
+
+      It is important to keep in mind that the contex variables are
+      not a part of the knowledge and that every knowledge computation
+      starts with a fresh set of variables, i.e., variables are not
+      persistent.
+
+      The data type of the context variable is not required to have
+      the domain structure or be comparable. The only requirement is
+      that when a variable is declared it should be initialized.
+
+      @since 2.4.0
+
+  *)
+  module Context : sig
+
+
+    (** an abstract type denoting a context variable and its name.  *)
+    type 'a var
+
+
+    (** [declare ~package name init] declares a new context variable.
+
+        The declared variable has the initial value [init]. The
+        [inspect] function could be used for debugging and
+        instrospection. *)
+    val declare : ?inspect:('a -> Sexp.t) -> ?package:string -> string ->
+      'a knowledge -> 'a var
+
+    (** [set v x] assings to the variable [v] a new value [x].  *)
+    val set : 'a var -> 'a -> unit knowledge
+
+    (** [get v] is the current value assigned to [v]. *)
+    val get : 'a var -> 'a knowledge
+
+    (** [update v f] applies [f] to the current value of [v] and
+        assigns the result back.
+    *)
+    val update : 'a var -> ('a -> 'a) -> unit knowledge
+
+
+    (** [with_var v x f] dynamically binds [v] to [x] while [f] is run.*)
+    val with_var : 'a var -> 'a -> (unit -> 'b knowledge) -> 'b knowledge
+  end
 
 
   (** prints the state of the knowledge base.  *)
@@ -282,8 +456,60 @@ module Knowledge : sig
     include Monad.Syntax.S with type 'a t := 'a t
 
 
-    (** [x-->p] is [collect p x] *)
+    (** the monadic let-binding operators.
+
+        Brings [let*] for [bind] and [let+] for [map] to the scope
+        of the [Syntax] module.
+
+        @since 2.4.0 (before that an explicit [open Knowledge.Let] was
+        required.    *)
+    include Monad.Syntax.Let.S with type 'a t := 'a t
+
+
+    (** [let*? v = x in f] evaluates to [f y] if [v] is [Some r].
+
+        Otherwise evaluates to [return None].
+
+        This let-binding operator is synonumous to [>>=?]
+
+        @since 2.4.0
+    *)
+    val (let*?) : 'a option t -> ('a -> 'b option t) -> 'b option t
+
+    (** [let+? v = x in f] evaluates to [!!(f y)] if [v] is [Some r].
+
+        Otherwise evaluates to [return None].
+
+        This let-binding operator is synonumous to [>>|?]
+
+        @since 2.4.0
+    *)
+    val (let+?) : 'a option t -> ('a -> 'b option) -> 'b option t
+
+    (** [x-->p] is [collect p x].
+
+        Example,
+        {[
+          let* addr = label-->address in
+          ...
+        ]}
+    *)
     val (-->) : 'a obj -> ('a,'p) slot -> 'p t
+
+
+    (** [x-->?p] returns property [p] if it is not empty.
+
+        Otherwise, if [x-->p] evaluates to empty or to [None]
+        fails with the empty value conflict.
+
+        Example,
+        {[
+          let* addr = label-->?address in
+          ...
+        ]}
+
+        See also {!with_empty}. *)
+    val (-->?) : 'a obj -> ('a, 'p option) slot -> 'p t
 
 
     (** [p <-- f] is [promise p f]  *)
@@ -300,6 +526,42 @@ module Knowledge : sig
 
     (** [x >>|? f] evaluates to [f y] if [x] evaluates to [Some y].  *)
     val (>>|?) : 'a option t -> ('a -> 'b option) -> 'b option t
+
+
+    (** [x.$[p]] is the propery [p] of [x].
+
+        @since 2.4.0
+    *)
+    val (.$[]) : ('a,_) cls value -> ('a,'p) slot -> 'p
+
+
+    (** [x.$[p] <- r] updates the property [p] of [x] to [r].
+
+        Returns the value [x] with the new property. The previous
+        value is ignored so there is no merging or monotonicity check
+        involved.
+
+        @since 2.4.0 *)
+    val (.$[]<-) : ('a,'b) cls value -> ('a,'p) slot -> 'p -> ('a,'b) cls value
+
+
+    (** [x.?[p]] returns the non-[None] property [p] or fails.
+
+        The result is [return r] when [x.$[p]] is [Some r] or a
+        knowledge base conflict otherwise.
+
+        @since 2.4.0
+    *)
+    val (.?[]) : ('a,_) cls value -> ('a,'p option) slot -> 'p knowledge
+
+    (** [x.![p]] returns the property [p] or fails if it is empty.
+
+        The result is [return r] if not [Domain.is_empty dom r],
+        where [dom] is [Slot.domain p].
+
+        @since 2.4.0
+    *)
+    val (.![]) : ('a,_) cls value -> ('a,'p) slot -> 'p knowledge
   end
 
 
@@ -501,6 +763,27 @@ module Knowledge : sig
     *)
     val scoped : ('a,_) cls -> ('a obj -> 'b knowledge) -> 'b knowledge
 
+
+    (** [null cls] is the null object of the class [cls].
+
+        For each class [cls] there is [null] that represents an
+        absence of object. It is unique and is represented as zero.
+
+        Dereference of the null object (e.g., using [collect]) always
+        returns an empty denotation. Any information stored in the
+        object is forgotten (discarded). Promises are never run on the
+        null object, therefore the promise will never receive the null
+        object as its input.
+
+        @since 2.4.0
+    *)
+    val null : ('a,_) cls -> 'a obj
+
+    (** [is_null obj] is [true] iff [obj] is the null object of its class.
+
+        @since 2.4.0 *)
+    val is_null : _ obj -> bool
+
     (** [repr x] returns a textual representation of the object [x] *)
     val repr : ('a,_) cls -> 'a t -> string knowledge
 
@@ -613,6 +896,13 @@ module Knowledge : sig
     val empty : ('a,'b) cls -> ('a,'b) cls value
 
 
+    (** [is_empty x] iff all properties of [x] are empty.
+
+        @since 2.5.0
+    *)
+    val is_empty : _ value -> bool
+
+
     (** [order x y] orders [x] and [y] by their information content.  *)
     val order : 'a value -> 'a value -> Order.partial
 
@@ -667,6 +957,12 @@ module Knowledge : sig
 
     (** [put p v x] sets a value of the property [p].  *)
     val put : ('k,'p) slot -> ('k,'s) cls value -> 'p -> ('k,'s) cls value
+
+    (** [has p x] if property [p] of [x] is not empty.
+
+        @since 2.5.0
+    *)
+    val has : ('k,'p) slot -> ('k,'s) cls value -> bool
 
     (** [refine v s] refines the sort of [v] to [s].
 
@@ -1150,7 +1446,7 @@ module Knowledge : sig
       string -> 'a option domain
 
 
-    (** [mapping total_order data_equal name] a point-wise mapping domain.
+    (** [mapping total_order ~equal ?join name] a point-wise mapping domain.
 
         Finite mapping naturally form domains, if every key in the
         mapping is considered an independent kind of information, and
@@ -1160,18 +1456,24 @@ module Knowledge : sig
 
         The upper bound of two mapping is the point-wise union of
         them, unless there is a key, which is present in both mapping
-        with different values (compared with [data_equal]). In the
-        latter case, the upper bound is the [conflict].
+        with different values (combined with [equal] by default). In
+        the latter case, the upper bound is the [conflict].
 
         The partial order between [x] and [y] is defined as follows:
         - [EQ] iff mappings are structurally equal;
         - [LT] iff [y] contains all bindings of [x] and [x <> y];
         - [GT] iff [x] contains all bindings of [y] and [x <> y];
         - [NC] iff neither of the above rules applicable.
+
+        @since 2.5.0, the optional [join] parameter is made available.
+        By default, it returns [Ok y] when two elements [x] and [y]
+        which share the same key are [equal]. Otherwise, it shall
+        return the least upper bound of [x] and [y], if it exists.
     *)
     val mapping :
       ('a,'e) Map.comparator ->
       ?inspect:('d -> Base.Sexp.t) ->
+      ?join:('d -> 'd -> ('d, conflict) result) ->
       equal:('d -> 'd -> bool) ->
       string ->
       ('a,'d,'e) Map.t domain
@@ -1214,7 +1516,7 @@ module Knowledge : sig
     val bool : bool option domain
 
 
-    (** [obj] is a flat domain with a nil object at the bottom.  *)
+    (** [obj] is a flat domain with a null object at the bottom.  *)
     val obj : ('a,_) cls -> 'a obj domain
 
 
@@ -1315,7 +1617,6 @@ module Knowledge : sig
   *)
   module Conflict : sig
     type t = conflict = ..
-
 
     (** [to_string err] is the textual representation of the conflict [err]
 

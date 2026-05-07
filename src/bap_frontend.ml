@@ -24,9 +24,11 @@ Report bugs to
 $(b,bapbundle)(1), $(b,bapbuild)(1), $(b,bap)(3)
 |}
 open Bap.Std
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Bap_main.Extension
+
+module Sys = Caml.Sys
 
 module type unit = sig end
 
@@ -167,7 +169,7 @@ let entity_desc : (entity * string) list = [
   `Collators, "project collators (comparators)";
 ]
 
-let () =
+let _list_command_declaration : unit =
   let what = Command.argument @@ Type.enum entities in
   let filter = Command.parameter Type.(list string) "filter"
       ~aliases:["f"]
@@ -301,13 +303,42 @@ let () =
     let open Bap_core_theory in
     Theory.Target.families () |> List.iter ~f:(function
         | parent :: members ->
+          let package = KB.Name.package (Theory.Target.name parent) in
+          let name t =
+            let n = Theory.Target.name t in
+            if String.equal package (KB.Name.package n)
+            then KB.Name.unqualified n
+            else KB.Name.show n in
           Format.printf "  %s:@\n" (Theory.Target.to_string parent);
           List.iter members ~f:(fun m ->
               Format.printf "   - %s@\n"
-                (Theory.Target.to_string m))
+                (name m))
         | _ -> ());
     Ok ()
 
+let _config_command_declaration : unit =
+  let entities = Configuration.[
+      "version", version;
+      "build_id", build_id;
+      "datadir", datadir;
+      "cachedir", cachedir;
+      "sysdatadir", sysdatadir;
+      "libdir", libdir;
+      "confdir", confdir;
+      "bindir", bindir;
+      "plugindir", plugindir;
+    ] in
+  let entity = Command.argument @@ Type.(some (enum entities)) in
+  let doc = "prints BAP configuration" in
+  Command.declare ~doc "config" Command.(args $entity) @@
+  fun entity _ctxt -> match entity with
+  | Some entity ->
+    Format.printf "%s@." entity;
+    Ok ()
+  | None ->
+    List.iter entities ~f:(fun (name, value) ->
+        Format.printf "%s: %s@." name value);
+    Ok ()
 
 let () =
   let _unused : (module unit) = (module Bap.Std) in

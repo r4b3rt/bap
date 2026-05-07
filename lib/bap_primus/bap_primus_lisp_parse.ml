@@ -1,7 +1,9 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Format
 open Bap_core_theory
+
+module Sys = Caml.Sys
 
 open Bap_primus_lisp_types
 
@@ -66,17 +68,23 @@ let is_quoted s =
   n > 1 && Char.(s.[0] = '"') && Char.(s.[n - 1] = '"')
 
 let is_symbol s =
-  String.length s > 1 && Char.(s.[0] = '\'')
+  String.length s > 1 && match s.[0] with
+  | '\'' | ':' -> true
+  | _ -> false
 
-let unqoute s =
+
+let is_keyword s =
+  String.length s > 1 && Char.(s.[0] = ':')
+
+
+let unquote s =
   if is_quoted s
   then String.sub ~pos:1 ~len:(String.length s - 2) s
   else s
 
-let symbol s =
-  if is_symbol s
-  then String.subo ~pos:1 s
-  else s
+let symbol ~package s =
+  if is_keyword s then KB.Name.read s
+  else KB.Name.read ~package (String.subo ~pos:1 s)
 
 module Parse = struct
   open Program.Items
@@ -107,7 +115,7 @@ module Parse = struct
       | Ok var -> var
 
   let fmt prog fmt tree =
-    let fmt = unqoute fmt in
+    let fmt = unquote fmt in
     let fail err off =
       let pos =
         Loc.nth_char (loc (Program.sources prog) [tree]) (off+1) in
@@ -118,7 +126,7 @@ module Parse = struct
         fail (Illegal_escape c) off in
     let nil = `Lit [] in
     let str cs = String.of_char_list (List.rev cs) in
-    let push_nothing = ident in
+    let push_nothing = Fn.id in
     let push s xs = s :: xs in
     let push_lit s = push (Lit s) in
     let push_pos x = push (Pos (Int.of_string (Char.to_string x))) in
@@ -209,7 +217,7 @@ module Parse = struct
 
       let sym ({id;eq;data=r} as s)  =
         if is_symbol r
-        then cons (Sym { s with data = qualify@@symbol s.data})
+        then cons (Sym { s with data = symbol ~package s.data})
         else match Var.read ~package id eq r with
           | Error e -> fail (Bad_var_literal e) tree
           | Ok v -> cons (Var v) in
@@ -258,7 +266,7 @@ module Parse = struct
     let rec loop xs acc = match xs with
       | [] -> acc
       | {data=Atom x} as s :: xs when is_quoted x ->
-        let x = try Scanf.unescaped x
+        let x = try Scanf.unescaped @@ unquote x
           with Scanf.Scan_failure _ -> fail Bad_ascii s in
         String.fold x ~init:acc ~f:(fun acc x ->
             {data=x; id = s.id; eq = Eq.null} :: acc) |>
@@ -283,14 +291,11 @@ module Parse = struct
     loop xs []
 
   let reader = function
-    | None -> ident
+    | None -> Fn.id
     | Some {data=Atom ":ascii"} -> ascii
     | Some {data=Atom ":hex"} -> hex
     | Some here -> fail Unknown_subst_syntax here
 
-  let is_keyarg = function
-    | {data=Atom s} -> Char.(s.[0] = ':')
-    | _ -> false
 
   let constrained prog attrs =
     Program.with_context prog @@
@@ -331,10 +336,14 @@ module Parse = struct
     Def.Para.create ?docs
       ~attrs name (parse (constrained prog attrs) body) tree
 
+  let is_keyarg = function
+    | {data=Atom s} -> is_keyword s
+    | _ -> false
+
   let defsubst ?docs ?(attrs=[]) name body prog gattrs tree =
-    let syntax = match body with
-      | s :: _ when is_keyarg s -> Some s
-      | _ -> None in
+    let syntax, body = match body with
+      | s :: body when is_keyarg s -> Some s, body
+      | _ -> None, body in
     Program.add prog subst @@
     Def.Subst.create ?docs
       ~attrs:(parse_declarations prog gattrs attrs) name
@@ -355,8 +364,8 @@ module Parse = struct
     List.fold ~init:prog trees ~f:(fun prog -> function
         | {data=List ({data=Atom ":use"} :: packages)} ->
           use_package ~package:name prog packages
-        | {data=List ({data=Atom ":documentation"} :: _)} ->
-          prog
+        | {data=List [{data=Atom ":documentation"}; {data=Atom docs}]} ->
+          Program.update_package_documentation prog name (unquote docs)
         | s -> fail (Bad_def Defpkg) s)
 
   let toplevels = String.Set.of_list [

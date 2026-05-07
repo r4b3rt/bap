@@ -1,8 +1,9 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Graphlib.Std
 open Bap_disasm_std
 
 module Ssa = Bap_sema_ssa
+module Flatten = Bap_sema_flatten
 module Ir_lift = Bap_sema_lift
 module Ir_graph = Bap_ir_graph
 module FV = Bap_sema_free_vars
@@ -14,6 +15,9 @@ module Std = struct
     include Ir_program
     let lift = Ir_lift.program
     let to_graph = Bap_ir_callgraph.create
+    module KB = struct
+      let lift = Ir_lift.KB.program
+    end
   end
 
   module Arg = Ir_arg
@@ -25,6 +29,13 @@ module Std = struct
     let lift = Ir_lift.blk
     let from_insn = Ir_lift.insn
     let from_insns = Ir_lift.insns
+    let flatten = Flatten.flatten_blk
+    module KB = struct
+      let lift = Ir_lift.KB.blk
+      let from_insn = Ir_lift.KB.insn
+      let from_insns = Ir_lift.KB.insns
+      let flatten = Flatten.KB.flatten_blk
+    end
   end
   module Sub = struct
     include Ir_sub
@@ -36,8 +47,15 @@ module Std = struct
     let is_ssa = Ssa.is_transformed
     let free_vars = FV.free_vars_of_sub
     let compute_liveness = FV.compute_liveness
+    let flatten = Flatten.flatten_sub
+    module KB = struct
+      let lift = Ir_lift.KB.sub
+      let ssa = Ssa.KB.sub
+      let flatten = Flatten.KB.flatten_sub
+    end
   end
 
+  module Live = FV.Live
   module Taint = Bap_sema_taint
 
   module Graphs = struct

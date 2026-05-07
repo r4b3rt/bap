@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_knowledge
 open Regular.Std
 open Bap.Std
@@ -83,14 +83,14 @@ module Std : sig
       but only one will be active. A component that is responsible for
       selecting a machine fork that is currently active is called
       {i scheduler}. Since there are few different scheduling strategies
-      avaiable, there are also a few schedulers.
+      available, there are also a few schedulers.
 
       {2 Components and Systems}
 
       Components are the main building blocks of the Primus
       machine. Components subscribe to the observations provided by
       Primus libraries and other components. The attached callbacks
-      changes the behavior of the Machine thusaffecting its semantics.
+      changes the behavior of the Machine thus affecting its semantics.
       A particular composition of components is called a
       {i system}. Therefore a system is a Primus application that could
       be run. The Primus Framework provides an extenisble repository
@@ -136,8 +136,7 @@ module Std : sig
 
       To run the specified system, either use {!Primus.System.run} to
       run it in the Knowledge monad or use
-      {!Primus.System.Generic.run} to run the Machine in the monad
-      some other monad.
+      {!Primus.System.Generic.run} to run the Machine in some other monad.
 
       It is also possible to create a {!Primus.Job} and enqueue it in
       the Primus Jobs queue with the {!Primus.Jobs.enqueue}
@@ -1943,8 +1942,9 @@ module Std : sig
         (** [pos m] current program position.  *)
         val pos : pos m
 
-        (** [sub x] computes the subroutine [x].  *)
+        (** [sub x] evaluates the subroutine [x].  *)
         val sub : sub term -> unit m
+
 
         (** [blk x] interprets the block [x].  *)
         val blk : blk term -> unit m
@@ -1957,6 +1957,27 @@ module Std : sig
 
         (** [set var x] sets [var] to [x]  *)
         val set : var -> value -> unit m
+
+        (** [assign lhs rhs] assigns [rhs] to an lvalue [lhs], fails
+            if [lhs] is not an lvalue.
+
+            An lvalue is an expression that denotes a program
+            location. An expression is an lvalue, if it is a variable;
+            a load; a conditional expersion with lvalues on both branches,
+            or a cast, extract, concat, from an lvalue.
+
+            {v
+               lvalue ::= Var _
+                        | Load (_,_,_,_)
+                        | Ite (_,<lvalue>,<lvalue>)
+                        | Cast (_,_,<lvalue>)
+                        | Extract (_,_,<lvalue>)
+                        | Concat (_,_,<lvalue>)
+            v}
+
+            @since 2.5.0  *)
+        val assign : exp -> value -> unit m
+
 
         (** [binop op x y] computes a binary operation [op] on [x] and [y].
 
@@ -2012,7 +2033,6 @@ module Std : sig
         (** [branch cnd yes no] if [cnd] evaluates to [zero] then
             [yes] else [no]. *)
         val branch : value -> 'a m -> 'a m -> 'a m
-
 
         (** [repeat cnd body] evaluates [body] until [cnd] evaluates
             to [zero]. Returns the value of [cnd].  *)
@@ -2552,7 +2572,7 @@ module Std : sig
         val get : addr -> value Machine.t
 
 
-        (** [set a x] stores the byte [x] at the address [a].
+        (** [set a x] stores [x] at the address [a].
 
             raises the [Pagefault] machine exception if [a] is not mapped,
             or not writable.
@@ -2562,6 +2582,19 @@ module Std : sig
         *)
         val set : addr -> value -> unit Machine.t
 
+
+        (** [set_never_fail a x] stores [x] at [a] bypassing any
+            checks.
+
+            Forcefully stores [x] at the address [a] without any
+            sanity checks, i.e., doesn't check if the memory is mapped or
+            is it writable.
+
+            Precondition: the size of the address and the size of the
+            datum match with the current [memory] sizes.
+
+            @since 2.6.0 *)
+        val set_never_fail : addr -> value -> unit Machine.t
 
         (** [del p] removes the value associated with the pointer [p].  *)
         val del : addr -> unit Machine.t
@@ -2576,9 +2609,24 @@ module Std : sig
 
             Same as [Value.of_word x >>= set a].
 
-            Precondition: [Value.bitwidth x = 8].
-        *)
+            Precondition: the size of the address and the size of the
+            datum match with the current [memory] sizes. *)
         val store : addr -> word -> unit Machine.t
+
+        (** [store_never_fail a x] stores [x] at [a] bypassing any
+            checks.
+
+            Forcefully stores [x] at the address [a] without any
+            sanity checks, i.e., doesn't check if the memory is mapped or
+            is it writable.
+
+            Same as [Value.of_word x >>= set_never_fail a].
+
+            Precondition: the size of the address and the size of the
+            datum match with the current [memory] sizes.
+
+            @since 2.6.0 *)
+        val store_never_fail : addr -> word -> unit Machine.t
 
         (** [add_text mem] maps a memory chunk [mem] as executable and
             readonly segment of machine memory.*)
@@ -3298,7 +3346,7 @@ module Std : sig
         syntactic level, the syntax of Primus Lisp itself is
         context-dependent.
 
-        {3 Context}
+        {3:context Context}
 
         A context (from the perspective of the type system) is a set
         of type class instances. The context is fixed when a program
@@ -3622,6 +3670,14 @@ text ::= ?any atom that is not recognized as a <word>?
       (** an abstract type representing a lisp program  *)
       type program
 
+      (** the set of type classes that constrain the context of
+          applicability of Primus Lisp definitions.
+
+          @see {{!context}the context section for more information}.
+          @since 2.5.0
+      *)
+      type context
+
 
       (** an abstract type that represents messages send with the
           [msg] form. *)
@@ -3658,6 +3714,40 @@ text ::= ?any atom that is not recognized as a <word>?
         val pp_program : Format.formatter -> program -> unit
       end
 
+
+      (** The set of constraints.
+
+          See {{!context} the context section for more information}.
+
+          Note, the context is automatically generated from the
+          project, when a Primus Lisp program is loaded. But it is
+          also possible to refine it using the unit's
+          {!Lisp.Semantics.context} slot.
+
+          @since 2.5.0
+      *)
+      module Context : sig
+        type t = context
+
+
+        (** [create [c1, f1;...; cN, fN]] creates the context.
+
+            The created context will have classes [c1,...,cN] defined
+            with feature sets [f1,...,fN] correspondingly. *)
+        val create : (string * string list) list -> context
+
+
+        (** [of_project program] the global program context.
+
+            @since 2.5.0 *)
+        val of_program : program -> context
+
+        (** Pretty-prints the context
+
+            @since 2.5.0 *)
+        val pp : Format.formatter -> context -> unit
+      end
+
       module Doc : sig
 
         (** Abstract Element of a document.
@@ -3671,10 +3761,23 @@ text ::= ?any atom that is not recognized as a <word>?
         end
 
         module Category : Element
-        module Name     : Element
-        module Descr    : Element
+        module Name     = Knowledge.Name
+        module Descr    : sig
+          include Element
+
+          (** [has_source desc] if the source code is available.
+              @since 2.5.0 *)
+          val has_source : t -> bool
+
+          (** prints the location if [has_source], otherwise does nothing.
+              @since 2.5.0  *)
+          val pp_location : Format.formatter -> t -> unit
 
 
+          (** prints source code if it is available, otherwise does nothing.
+              @since 2.5.0 *)
+          val pp_source : Format.formatter -> t -> unit
+        end
 
         (** Documentation index.
 
@@ -3867,6 +3970,10 @@ text ::= ?any atom that is not recognized as a <word>?
       *)
       module Semantics : sig
 
+        (** the representation of semantic values.
+
+            @since 2.4.0  *)
+        type value = unit Theory.Value.t
 
         (** occurs when no matching definition is found
 
@@ -3879,6 +3986,13 @@ text ::= ?any atom that is not recognized as a <word>?
         (** occurs when the Lisp program is ill-typed  *)
         type KB.conflict += Illtyped_program of Type.error list
 
+        (** occurs when a primitive fails.
+
+            See also, {!failp}
+
+            @since 2.4.0  *)
+        type KB.conflict += Failed_primitive of KB.Name.t * string
+
 
         (** a property of the program source object in which
             a Lisp program is stored.
@@ -3887,6 +4001,20 @@ text ::= ?any atom that is not recognized as a <word>?
             lookup for the definitions.
         *)
         val program : (Theory.Source.cls, program) KB.slot
+
+
+        (** Primus Lisp definitions constraints.
+
+            The set of type classes that describe the unit constraints
+            and limits applicability of Primus Lisp definitions to the
+            selected compilation unit.
+
+            Each Primus Lisp definition has a {!context} class of its
+            applicability. The definition will only be used if its
+            context is a subtype of the unit context.
+
+            @since 2.5.0  *)
+        val context : (Theory.Unit.cls, context) KB.slot
 
 
         (** The Primus Lisp definition to which the program belongs.
@@ -3987,7 +4115,97 @@ text ::= ?any atom that is not recognized as a <word>?
         val declare :
           ?types:Type.signature ->
           ?docs:string ->
-          ?package:string -> string -> unit
+          ?package:string ->
+          ?body:(Theory.Target.t -> (Theory.Label.t -> value list -> unit Theory.eff) KB.t) ->
+          string -> unit
+
+
+        (** [signal ~params ~docs property args] declares a signal.
+
+            Emits a signal with arguments [args l v], when the
+            [property] value of a program label [l] changes to
+            [v]. The name of the signal is the same as the name of the
+            property.
+
+            The signal triggers all methods with the same method name
+            as the signal.
+
+            @since 2.4.0
+        *)
+        val signal :
+          ?params:[< Type.parameters] ->
+          ?docs:string ->
+          (Theory.program, 'p) KB.slot ->
+          (Theory.Label.t -> 'p -> value list KB.t) ->
+          unit
+
+        (** [failp err_msg args...] terminates a primitive with error.
+
+            Must be called from a primitive implementation to stop
+            the evaluation with the [Failed_primitive] conflict.
+
+            This conflict should used to report programmer errors
+            that are not representable via the type system (or slipped
+            through the gradual type checker).
+
+            @since 2.4.0
+        *)
+        val failp : ('a, Format.formatter, unit, 'b KB.t) format4 -> 'a
+
+        (** [documentation unit] documentation for [unit]'s lisp source.
+
+            Typechecks and loads the unit lisp source and generates
+            its documentation. *)
+        val documentation : Theory.Unit.t -> Doc.index KB.t
+
+        (** Pure semantic value.
+
+            @since 2.4.0  *)
+        module Value : sig
+          type t = value
+
+          (** [static x] a value statically equal to [x].*)
+          val static : Bitvec.t -> t
+
+          (** [symbol s] a symbolic value.
+
+              A symbolic value is also static and the Primus Lisp
+              lifter will intern symbols by asigning a static value
+              for each symbol so that distinct symbols will have
+              distinct static values. *)
+          val symbol : string -> t
+
+
+          (** [custom prop x] creates a custom static value.
+
+              The property [prop] is set to [x] and the [symbol] slot
+              is set to [t], i.e., to [true] so that the value
+              evaluates to non-nil in the condition expressions.   *)
+          val custom : (Theory.Value.cls, 'a) KB.slot -> 'a -> t
+
+
+          (** the false value that evaluates to [nil] symbol having
+              [0] representation. *)
+          val nil : t
+        end
+
+
+        (** Effectful semantic values.
+
+            @since 2.4.0
+        *)
+        module Effect : sig
+          type t = unit Theory.Effect.t
+
+          (** [pure x] an empty effect with value [x]
+
+              sets the [Theory.Semantics.value] slot to [x].
+          *)
+          val pure : Value.t -> t
+
+          (** [return x] same as [KB.return@@pure x] *)
+          val return : Value.t -> t KB.t
+        end
       end
 
 

@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Or_error
 
 open Bap.Std
@@ -28,6 +28,8 @@ type value = Value.t [@@deriving sexp, bin_io, compare]
 type scheme = value option reader list
 type table = scheme Table.t
 
+
+let functions = Fn.id
 
 (**   *)
 module Fn = struct
@@ -137,7 +139,7 @@ let read_scheme s str_sec action str ~pos_ref =
       loop (emit attr form :: acc) in
   loop []
 
-let rec create_table s str_sec str ~pos_ref =
+let create_table s str_sec str ~pos_ref =
   let abbrs : table = Table.create () in
   let rec fill () =
     Input.code str ~pos_ref >>= function
@@ -176,7 +178,7 @@ let read_function cu_end abbrs str ~pos_ref  =
       run_scheme scheme str ~pos_ref >>| fun vs ->
       match fn_of_values vs with
       | Ok fn -> Yield (fn, ())
-      | Error err -> Skip ()
+      | Error _ -> Skip ()
   else return Done
 
 let create data : t Or_error.t =
@@ -202,7 +204,7 @@ let create data : t Or_error.t =
     create_table s str_sec abbr ~pos_ref:abbr_pos >>= fun abbrs ->
     return (abbrs, cu_end) in
 
-  let rec read_unit () =
+  let read_unit () =
     read_header () >>| fun init ->
     Sequence.unfold_step ~init ~f:(fun (abbrs,cu_end) ->
         let open Sequence.Step in
@@ -226,5 +228,3 @@ let create data : t Or_error.t =
             (Error.to_string_hum err);
           Sequence.Step.Done) in
   read_unit ()
-
-let functions = ident

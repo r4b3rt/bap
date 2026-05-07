@@ -5,7 +5,7 @@ Displays information about the binary. The information is printed in
 the OGRE format.
 "
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_main
 open Bap.Std
 open Regular.Std
@@ -82,3 +82,8 @@ let string_of_problem = function
 let () = Extension.Error.register_printer @@ function
   | Fail p -> Some (string_of_problem p)
   | _ -> None
+
+
+let () = Extension.declare ~doc:"provides the specification command"
+    ~provides:["command"; "specification"; "ogre"]
+    (fun _ -> Ok ())

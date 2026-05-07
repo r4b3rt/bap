@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Bap_primus.Std
@@ -163,7 +163,7 @@ module Main(Machine : Primus.Machine.S) = struct
         Returns nil if KEY was the last key in the dictionary.
         Could be used together with DICT-FIRST for iterating.|};
 
-      def "dict-length" (tuple [sym] @-> int) (module First)
+      def "dict-length" (tuple [sym] @-> int) (module Length)
         {|(dict-first DIC) is the total number of keys in DIC.|};
     ]
 end
@@ -179,7 +179,10 @@ let () = Config.manpage [
     `P desc;
   ]
 
-let () = Config.when_ready @@ fun _ ->
+let () = Config.declare_extension
+    ~doc:"provides a Primus Lisp key-value storage library"
+    ~provides:["primus"; "primus-library"; "dictionary"]
+  @@ fun _ ->
   Primus.Machine.add_component (module Main) [@warning "-D"];
   Primus.Components.register_generic "lisp-dictionary" (module Main)
     ~package:"bap"

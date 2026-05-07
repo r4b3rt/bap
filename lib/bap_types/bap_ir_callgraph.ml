@@ -1,8 +1,8 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Graphlib.Std
 open Bap_ir
-open Bap_common
+open Bap_common_types
 
 module G = Graphlib.Make(Tid)(struct type t = jmp term list end)
 

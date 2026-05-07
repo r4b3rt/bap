@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Or_error
 open Bap.Std
 open X86_tools_types
@@ -33,10 +33,7 @@ module Make (PR : PR) = struct
     let lift mem insn =
       let lift = search lifts insn in
       try match lift mem insn with
-        | Error err ->
-          warning "failed to lift %a - %a"
-            X86_utils.pp_insn (mem,insn) Error.pp err;
-          Error err
+        | Error err -> Error err
         | Ok bil as ok -> match Type.check bil with
           | Ok () -> ok
           | Error te ->

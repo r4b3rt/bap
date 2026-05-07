@@ -1,8 +1,8 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 
 open Regular.Std
-open Bap_common
+open Bap_common_types
 type t
 include Regular.S with type t := t
 
@@ -20,3 +20,4 @@ val name : t -> string
 val typ : t -> typ
 val is_virtual : t -> bool
 val is_physical : t -> bool
+val sort_of_typ : typ -> unit Theory.Value.sort

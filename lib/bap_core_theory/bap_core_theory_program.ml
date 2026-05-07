@@ -1,8 +1,8 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bitvec_order.Comparators
 open Bap_knowledge
 
-let package = "core-theory"
+let package = "core"
 module Value  = Bap_core_theory_value
 module Effect = Bap_core_theory_effect
 module Target = Bap_core_theory_target
@@ -19,6 +19,12 @@ let program = cls
 let word = Knowledge.Domain.optional "word"
     ~equal:Bitvec.equal
     ~inspect:Bitvec_sexp.sexp_of_t
+
+let hexcode = Knowledge.Domain.optional "hexcode"
+    ~equal:String.equal
+    ~inspect:(Fn.compose sexp_of_string @@
+              String.concat_map ~sep:" " ~f:(fun c ->
+                  Format.sprintf "%02x" @@ Char.to_int c))
 
 let name = Knowledge.Domain.optional "name"
     ~equal:String.equal
@@ -48,7 +54,14 @@ let string_property ?(domain=name) ~desc cls name =
     ~public:true
     ~desc
 
-module Language = Knowledge.Enum.Make()
+module Language = struct
+  include Knowledge.Enum.Make()
+  let c = declare ~package "c"
+  let cxx = declare ~package "cxx"
+  let ada = declare ~package "ada"
+  let fortran = declare ~package "fortran"
+  let pascal = declare ~package "pascal"
+end
 type language = Language.t
 
 module Source = struct
@@ -251,6 +264,9 @@ module Label = struct
 
   open Knowledge.Syntax
 
+  let null = Knowledge.Object.null cls
+  let fresh = Knowledge.Object.create cls
+
   let for_name ?package s =
     Knowledge.Symbol.intern ?package s cls >>= fun obj ->
     Knowledge.provide name obj (Some s) >>| fun () -> obj
@@ -270,14 +286,6 @@ module Label = struct
     | None -> Knowledge.return Target.unknown
     | Some unit -> Knowledge.collect Unit.target unit
 
-  let _decide_name_from_possible_name : unit =
-    Knowledge.Rule.(declare ~package "name-of-possible-names" |>
-                    require possible_name |>
-                    provide name |>
-                    comment "resolves possible name");
-    Knowledge.promise name @@
-    Knowledge.resolve possible_name
-
   include (val Knowledge.Object.derive cls)
 end
 
@@ -293,6 +301,13 @@ module Semantics = struct
       ~persistent:(Knowledge.Persistent.of_binable (module Value.Top))
       ~public:true
       ~desc:"the program semantics"
+  let code = Knowledge.Class.property ~package cls "insn-code" hexcode
+      ~persistent:(Knowledge.Persistent.of_binable (module struct
+                     type t = string option
+                     [@@deriving bin_io]
+                   end))
+      ~public:true
+      ~desc:"the program memory contents"
 
   include Self
 end

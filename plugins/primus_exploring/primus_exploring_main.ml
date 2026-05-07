@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Monads.Std
 open Bap_primus.Std
@@ -112,4 +112,7 @@ manpage [
 let enabled = flag "scheduler" ~doc:"Enable the scheduler."
 
 
-let () = when_ready (fun {get=(!!)} -> register !!enabled)
+let () = declare_extension
+    ~doc:"evaluates all Primus machines, prioritizing the least visited"
+    ~provides:["primus"; "scheduler"]
+    (fun {get=(!!)} -> register !!enabled)

@@ -1,12 +1,12 @@
 (** A representation of relations between two sets.
 
     A relation between two sets is a set of pairs made from the
-    elements of these sets. The precise mathematical defition is given
+    elements of these sets. The precise mathematical definition is given
     below. This module implements a bidirectional mapping between two
     sets and computes their matching that defines bijections between
     the sets.
 
-    {2 Format Definition and Notation}
+    {2 Formal Definition and Notation}
 
     Given two sets [K] and [S], with meta-variables [x,y,z] ranging
     over [K] and meta-variables [r,s,t] ranging over [S] we will
@@ -77,7 +77,7 @@ val iter : ('k,'s) t -> f:('k -> 's -> unit) -> unit
       [Non_injective_bwd ([r;s],x);
 *)
 
-(** the reason why was the pair left unmatched  *)
+(** the reason why the pair was left unmatched  *)
 type ('k,'s) non_injective =
   | Non_injective_fwd of 'k list * 's (** Non-injective forward mapping.  *)
   | Non_injective_bwd of 's list * 'k (** Non-injective backward mapping.  *)

@@ -1,8 +1,8 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Or_error
 
-open Bap_common
+open Bap_common_types
 
 let in_bits : 'a -> int = function
   | `r8   -> 8

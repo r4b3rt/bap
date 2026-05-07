@@ -12,14 +12,16 @@
   (:documentation "program-specific definitions (program global variables)"))
 
 (defpackage posix
-  (:documentation "posix runtime defintions")
+  (:documentation "posix runtime definitions")
   (:use core primus program target))
 
 (defpackage user
   (:documentation "the default user-space package")
   (:use core primus target program posix))
 
-
+(defpackage bap
+  (:documentation "the bap framework package")
+  (:use core target program posix))
 
 (in-package core)
 
@@ -137,6 +139,12 @@
     (msg "Assertion (assert $0) failed" c)
     (error "Assert_failure")))
 
+(defmacro assert-msg (c s)
+  "(assert-msg c s) allows you to assert a condition and print a message on failure"
+  (when (not c)
+    (msg s)
+    (error "Assert_failure")))
+
 (defmacro is-in (x y)
   "(is-in X A B C ...) returns true if X is equal A or B or C or ..."
   (= x y))
@@ -147,6 +155,16 @@
   "(fold F A X Y ...) expands to (F (F A X) Y) ..."
   (f a x))
 (defmacro fold (f a x xs) (fold f (f a x) xs))
+
+(defmacro dolist (f x)
+  "(dolist F X Y ...) expands to (F X) (F Y) ..."
+  (f x))
+
+(defmacro dolist (f x xs) (prog (f x) (dolist f xs)))
+
+(defun ident (x)
+  "(ident X) is X"
+  x)
 
 (defmacro min (x)
   "(min X Y ...) returns the lower bound of the (X,Y,...) set"
@@ -167,3 +185,5 @@
 (defmacro cast (type x) (extract  (-1 (type)) 0 x))
 (defmacro bitwidth (type) (type))
 (defmacro sizeof (type) (/ (bitwidth type) 8))
+(defun coerce (type v)
+  (if (/= (word-width v) type) (extract (-1 type) 0 v) v))

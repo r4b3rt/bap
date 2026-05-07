@@ -1,5 +1,5 @@
 open Bap_core_theory
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Regular.Std
 open Or_error
 open Format
@@ -46,6 +46,8 @@ module Packed : sig
   val payload : t -> Bitvec.t
 
   val hash : t -> int
+  val compare : t -> t -> int
+  val nsucc : t -> int -> t
 
   val lift1 : t -> (Bitvec.t -> Bitvec.t Bitvec.m) -> t
   val lift2 : t -> t -> (Bitvec.t -> Bitvec.t -> Bitvec.t Bitvec.m) -> t
@@ -73,12 +75,12 @@ end = struct
     let {data} = data x in
     Z.hash data
   let payload x =
-    let m = modulus x in
-    let z = data x in
-    Bitvec.(bigint z.data mod m)
+    let {data} = data x in
+    Bitvec.bigint_unsafe data
   [@@inline]
 
   let is_signed {packed=x} = Z.(is_odd x) [@@inline]
+  let compare {packed=x} {packed=y} = Z.compare x y [@@inline]
 
   let unsigned ({packed} as x) =
     if is_signed x
@@ -94,6 +96,11 @@ end = struct
     {packed=Z.(x lsl metasize lor meta)}
   [@@inline]
 
+  let nsucc x n =
+    let w = bitwidth x in
+    let x = payload x in
+    pack Bitvec.(to_bigint (nsucc x n mod modulus w)) w
+
   let create ?(signed=false) x w =
     let m = Bitvec.modulus w in
     let x = Bitvec.(bigint x mod m) in
@@ -106,18 +113,21 @@ end = struct
     let x = payload x in
     pack Bitvec.(to_bigint (f x mod modulus w)) w
   [@@inline]
+  [@@specialise]
 
   let lift2 x y f =
     let w = bitwidth x in
     let x = payload x and y = payload y in
     pack Bitvec.(to_bigint (f x y mod modulus w)) w
   [@@inline]
+  [@@specialise]
 
   let lift3 x y z f =
     let w = bitwidth x in
     let x = payload x and y = payload y and z = payload z in
     pack Bitvec.(to_bigint (f x y z mod modulus w)) w
   [@@inline]
+  [@@specialise]
 
   module Stringable = struct
     type t = packed
@@ -147,7 +157,7 @@ let data_word t x = create x (Theory.Target.bits t) [@@inline]
 let to_bitvec x = Packed.payload x [@@inline]
 let unsigned x = x [@@inline]
 let signed x = Packed.signed x [@@inline]
-let hash x = Packed.hash x [@@inline]
+let hash x = Bitvec.hash (Packed.payload x) [@@inline]
 let bits_of_z x = Bitvec.to_binary (Packed.payload x)
 let unop op t = Packed.lift1 t op [@@inline]
 let binop op t1 t2 = Packed.lift2 t1 t2 op [@@inline]
@@ -261,14 +271,26 @@ type packed = Packed.t [@@deriving bin_io]
 let sexp_of_packed = Sexp_hum.sexp_of_t
 let packed_of_sexp = Sexp_hum.t_of_sexp
 
-let compare_mono x y =
-  if is_signed x || is_signed y then
-    let x_is_neg = msb x and y_is_neg = msb y in
-    match x_is_neg, y_is_neg with
-    | true,false -> -1
-    | false,true -> 1
-    | _ -> Bitvec.compare (payload x) (payload y)
-  else Bitvec.compare (payload x) (payload y)
+
+let compare_literal = Packed.compare
+
+let compare_unsigned x y =
+  Bitvec.compare (payload x) (payload y)
+[@@inline]
+
+let compare_signed x y =
+  if phys_equal x y then 0
+  else
+    match compare_literal x y with
+    | 0 -> 0
+    | _ ->
+      if is_signed x || is_signed y then
+        let x_is_neg = msb x and y_is_neg = msb y in
+        match x_is_neg, y_is_neg with
+        | true,false -> -1
+        | false,true -> 1
+        | _ -> compare_unsigned x y
+      else compare_unsigned x y
 
 let with_validation t ~f = Or_error.map ~f (Validate.result t)
 
@@ -562,11 +584,10 @@ let enum_bits bv endian =
 
 module Mono = Comparable.Make(struct
     type t = packed [@@deriving sexp]
-    let compare x y =
-      if phys_equal x y then 0
-      else match Int.compare (bitwidth x) (bitwidth y) with
-        | 0 -> compare_mono x y
-        | _ -> failwith "Non monomorphic comparison"
+    let compare x y = match compare_signed x y with
+      | 0 -> 0
+      | r when Int.equal (bitwidth x) (bitwidth y) -> r
+      | _ -> failwith "Non monomorphic comparison"
   end)
 
 
@@ -613,19 +634,47 @@ module Trie = struct
   end
 end
 
+module Literal_order = struct
+  type t = packed [@@deriving bin_io, sexp]
+  include Comparable.Make_binable(Packed)
+  include Hashable.Make_binable_and_derive_hash_fold_t(Packed)
+end
+
+module Unsigned_value_order = struct
+  module Order = struct
+    type t = packed [@@deriving bin_io,sexp]
+    let compare = compare_unsigned
+    let hash = hash
+  end
+  include Comparable.Make_binable(Order)
+  include Hashable.Make_binable_and_derive_hash_fold_t(Order)
+  include Order
+end
+
+module Signed_value_order = struct
+  module Order = struct
+    type t = packed [@@deriving bin_io,sexp]
+    let compare = compare_signed
+    let hash = hash
+  end
+  include Comparable.Make_binable(Order)
+  include Hashable.Make_binable_and_derive_hash_fold_t(Order)
+  include Order
+end
+
 include Or_error.Monad_infix
 include Regular.Make(struct
     type t = packed [@@deriving bin_io, sexp]
     let compare x y =
       if phys_equal x y then 0
       else match Int.compare (bitwidth x) (bitwidth y) with
-        | 0 -> compare_mono x y
+        | 0 -> compare_signed x y
         | r -> r
     [@@inline]
     let version = "2.0.0"
     let module_name = Some "Bap.Std.Word"
     let pp ppf = pp_generic ppf
-    let hash = Packed.hash
+    let hash x = Int.hash (bitwidth x) lxor hash x
   end)
 module Int_err = Safe
 include (Unsafe : Bap_integer.S with type t := t)
@@ -656,7 +705,7 @@ end
 module Stable = struct
   module V1 = struct
     type t = Packed.t
-    let compare = compare
+    let compare = compare_signed
 
     let of_legacy {V1.z; w; signed=s} =
       let x = pack z w in
@@ -683,9 +732,10 @@ module Stable = struct
 
   module V2 = struct
     type t = Packed.t [@@deriving bin_io, sexp]
-    let compare = compare
+    let compare = compare_signed
   end
 end
+
 
 
 let to_string = string_of_word

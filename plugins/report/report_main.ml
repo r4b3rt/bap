@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Bap_future.Std
 open Format
@@ -190,6 +190,9 @@ let print_events () =
 let enabled = Config.flag "progress" ~doc:"Show progress bars"
 let events = Config.flag "events" ~doc:"Output progress events"
 let () =
-  Config.when_ready (fun {Config.get=(!!)} ->
-      if !!enabled then enable ();
-      if !!events then print_events ());
+  Config.declare_extension
+    ~doc:"reports program status using progress bars"
+    ~provides:["report"; "visualization"]
+    (fun {Config.get=(!!)} ->
+       if !!enabled then enable ();
+       if !!events then print_events ());

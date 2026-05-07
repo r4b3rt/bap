@@ -1,8 +1,9 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap_primus.Std
 open KB.Syntax
 open KB.Let
+module Z = Bitvec
 
 let export = Primus.Lisp.Type.Spec.[
     "+", all any @-> any,
@@ -10,10 +11,19 @@ let export = Primus.Lisp.Type.Spec.[
      type conversions in the process. If no numbers are supplied, 0 is \
      returned.";
 
+    "+.", tuple [sym] // all any @-> any,
+    "(+. MODE X Y ... Z) evaluates to a sum of floating-point numbers \
+     X,Y,..,Z using the rounding mode MODE. (+. MODE) evaluates to 0.0.";
+
     "-", all any @-> any,
     "(- X Y ... Z) returns X - Y - ... - Z, performing any necessary \
      type conversions in the process. If no numbers are supplied \
      returns 0. If one number is supplied returns its negation.";
+
+    "-.", tuple [sym] // all any @-> any,
+    "(-. MODE X Y ... Z) performs floating-point subtraction, \
+     X - Y - ... - Z, using the rounding mode MODE. \
+     (-. MODE) evaluates to 0.0.";
 
     "neg", one any @-> any,
     "(neg X) returns the negation (2-complement) of X. Same as (- X).";
@@ -26,11 +36,20 @@ let export = Primus.Lisp.Type.Spec.[
      type conversions in the process. If no numbers are supplied, 1 is \
      returned.";
 
+    "*.", tuple [sym] // all any @-> any,
+    "(-. MODE X Y ... Z) performs floating-point multiplication, \
+     X * Y * ... * Z, using the rounding mode MODE. \
+     (*. MODE) evaluates to 1.0.";
+
     "/", all any @-> any,
     "(/  X Y ... Z) returns X / Y / ... / Z, performing any necessary \
      type conversions in the process. If no numbers are supplied, 1 is \
      returned. If one number is provided returns its reciprocal.";
 
+    "/.", tuple [sym] // all any @-> any,
+    "(-. MODE X Y ... Z) performs floating-point division, \
+     X / Y / ... / Z, using the rounding mode MODE. \
+     (/. MODE) evaluates to 1.0.";
 
     "s/", all any @-> any,
     "(s/ X Y ... Z) returns signed X / Y / ... / Z, performing any \
@@ -87,40 +106,102 @@ let export = Primus.Lisp.Type.Spec.[
      are supplied, 1 is returned. If one number is provided returns \
      that number";
 
+    "<.", all any @-> any,
+    "(< X Y ... Z) is true iff all floating-point numbers are in \
+     the strictly increasing order. Synonym to FORDER.";
+
+    "forder", all any @-> any,
+    "(forder X Y ... Z) is true iff all floating-point numbers are in \
+     the strictly increasing order.";
+
+    "=.", all any @-> any,
+    "(=. X Y ... Z) is true iff all floating-point numbers are \
+     equal in value.";
+
+    ">.", all any @-> any,
+    "(>. X Y ... Z) is true iff all floating-point numbers are \
+     in the strictly decreasing order.";
+
+    "<=.", all any @-> any,
+    "(<= X Y ... Z) is true iff all floating-point numbers are \
+     in the increasing (non-decreasing) order.";
+
+    ">=.", all any @-> any,
+    "(>=. X Y ... Z) returns true if all floating-point numbers are in \
+     the decreasing (non-increasing) order.";
+
+    "is-finite", all any @-> any,
+    "(is-finite X Y ... Z) is true iff all values represent finite \
+     floating-point numbers";
+
+    "is-nan", all any @-> any,
+    "(is-nan X Y ... Z) is true iff all values represent NaN.";
+
+    "is-inf", all any @-> any,
+    "(is-inf X Y ... Z) is true iff all values represent positive \
+     or negative infinities.";
+
+    "is-fzero", all any @-> any,
+    "(is-zero X Y ... Z) is true iff all floating-point numbers are zero.";
+
+    "is-fpos", all any @-> any,
+    "(is-fpos X Y ... Z) is true iff all values represent positive \
+     floating-point numbers.";
+
+    "is-fneg", all any @-> any,
+    "(is-fneg X Y ... Z) is true iff all values represent negative \
+     floating-point numbers.";
+
     "=", all any @-> any,
-    "(= X Y ... Z) returns one if all numbers are equal in value.";
+    "(= X Y ... Z) is true iff all numbers are equal in value.";
 
     "/=", all any @-> any,
-    "(/= X Y ... Z) returns one if all numbers are distinct.";
+    "(/= X Y ... Z) is true iff all numbers are distinct.";
 
     "<", all any @-> any,
-    "(< X Y ... Z) returns one if all numbers are in monotonically \
+    "(< X Y ... Z) is true iff all numbers are in the strictly \
      increasing order.";
 
     ">", all any @-> any,
-    "(> X Y ... Z) returns one if all numbers are in monotonically \
+    "(> X Y ... Z) is true iff all numbers are in the strictly \
      decreasing order.";
 
     "<=", all any @-> any,
-    "(<= X Y ... Z) returns one if all numbers are in monotonically \
-     nondecreasing order.";
+    "(<= X Y ... Z) is true iff all numbers are in the increasing  \
+     (non-decreasing) order.";
 
     ">=", all any @-> any,
-    "(> X Y ... Z) returns one if all numbers are in monotonically \
-     nonincreasing order.";
+    "(>= X Y ... Z) is true iff all numbers are in the decreasing \
+     (non-increasing) order.";
+
+    "s<", all any @-> any,
+    "(s< X Y ... Z) is true iff all numbers are in the strictly \
+     increasing signed order.";
+
+    "s>", all any @-> any,
+    "(s> X Y ... Z) is true iff all numbers are in the strictly \
+     decreasing signed order.";
+
+    "s<=", all any @-> any,
+    "(s<= X Y ... Z) is true iff all numbers are in the increasing \
+     (non-decreasing) signed order.";
+
+    "s>=", all any @-> any,
+    "(> X Y ... Z) is true iff all numbers are in the decreasing \
+     (non-increasing) signed order.";
 
     "is-zero", all any @-> any,
-    "(is-zero X Y ... Z) returns one if all numbers are zero.";
+    "(is-zero X Y ... Z) is true iff all numbers are zero.";
 
     "not", all any @-> any,
-    "(not X Y ... Z) returns one if all numbers are not \
+    "(not X Y ... Z) is true iff all numbers are not \
      true. Equivalent to (is-zero X Y Z)";
 
     "is-positive", all any @-> any,
-    "(is-zero X Y ... Z) returns one if all numbers are positive.";
+    "(is-positive X Y ... Z) is true iff all numbers are positive.";
 
     "is-negative", all any @-> any,
-    "(is-zero X Y ... Z) returns one if all numbers are negative.";
+    "(is-negative X Y ... Z) is true iff all numbers are negative.";
 
     "word-width", all any @-> any,
     "(word-width X Y ... Z) returns the maximum width of its \
@@ -128,7 +209,15 @@ let export = Primus.Lisp.Type.Spec.[
      machine word.";
 
     "exec-addr", one int @-> any,
-    "(exec-addr ADDR) transfers control flow to ADDR.";
+    "(exec-addr ADDR) transfers control to ADDR.";
+
+    "invoke-subroutine", one sym @-> any,
+    "(invoke-subroutine NAME) passes control to the subroutine NAME.";
+
+    "goto-subinstruction", one int @-> any,
+    "(goto-subinstruction N) transfers control flow to a
+    subinstruction that is N instructions away from the current (N
+    could be negative).";
 
     "load-byte", one int @-> byte,
     "(load-byte PTR) loads one byte from the address PTR";
@@ -141,7 +230,7 @@ let export = Primus.Lisp.Type.Spec.[
     "(load-word PTR) loads one word from the address PTR";
 
     "load-bits", tuple [any; int] @-> int,
-    "(load-word SIZE PTR) loads a SIZE-bit long word from the address PTR";
+    "(load-bits SIZE PTR) loads a SIZE-bit long word from the address PTR";
 
     "load-hword", one int @-> any,
     "(load-hword PTR) loads half-word from the address PTR";
@@ -159,7 +248,7 @@ let export = Primus.Lisp.Type.Spec.[
     "(store-word POS VAL) stores VAL at the memory position POS";
 
     "memory-write", tuple [int; byte] @-> int,
-    "(memory-write PTR X) stores X at PTR.";
+    "(memory-write PTR X) stores byte X at PTR.";
 
     "get-program-counter", unit @-> int,
     "(get-program-counter) returns the address of the current instruction";
@@ -167,12 +256,28 @@ let export = Primus.Lisp.Type.Spec.[
     "get-current-program-counter", unit @-> int,
     "(get-current-program-counter) is an alias to (get-program-counter)";
 
-    "set-symbol-value", tuple [sym; a] @-> a,
+    "set-symbol-value", tuple [any; a] @-> a,
     "(set-symbol-value S X) sets the value of the symbol S to X.
          Returns X";
 
     "symbol", one any @-> sym,
     "(symbol X) returns a symbol representation of X.";
+
+    "unquote", one sym @-> any,
+    "(unquote 'X) evaluates to X";
+
+    "is-symbol", one any @-> bool,
+    "(is-symbol X) is true if X has a symbolic value.";
+
+    "symbol-concat", all sym @-> sym,
+    "(symbol-concat S1 S2 .. SN OPT?) concatenates symbols
+    S1 till S2. An optional separator keyworded argument
+    takes form :sep SEP, where SEP is the separator that is
+    used to concatenate symbols";
+
+    "alias-base-register", one int @-> int,
+    "(alias-base-register x) if X has a symbolic value that is an
+     aliased register returns the base register";
 
     "cast-low", tuple [int; a] @-> b,
     "(cast-low S X) extracts low S bits from X.";
@@ -185,6 +290,12 @@ let export = Primus.Lisp.Type.Spec.[
 
     "cast-unsigned", tuple [int; a] @-> b,
     "(cast-unsigned S X) performs unsigned extension of X to the size of S bits";
+
+    "cast-saturate", tuple [sym; int; a] @-> b,
+    "(cast-saturate T S X) performs saturated downcasting
+    of X to the size of S bits. If X doesn't fit into lower or upper
+    bound of S then it is saturated to the coresponding value, the keyword
+    T shall be either :signed or :unsigned";
 
     "extract", tuple [any; any; any] @-> any,
     "(extract HI LO X) extracts bits from HI to LO (both ends
@@ -201,6 +312,56 @@ let export = Primus.Lisp.Type.Spec.[
     "nth", (one any @-> bool),
     "(nth N X) returns the Nth bit of X. N must be static. \
      The function is equivalent to (select N X)";
+    "empty", (unit @-> any),
+    "(empty) denotes an instruction that does nothing, i.e., a nop.";
+    "intrinsic", tuple [sym] // all any @-> any,
+    "(intrinsic 'NAME ARG1 ARG2 ... ARGN PARAMS..) produces a call to
+     an intrinsic function with the given NAME. Arguments could be
+     regular semantic values. They are passed to the intrinsic
+     function in order, with the first argument passed via the
+     intrinsic:x0 ... intrinsic:xN variables. The keyworded parameters
+     are optional. And could be either :return SIZE, which indicates
+     that the call evaluates to a bitvector value of the given SIZE;
+     :writes REG SIZE? denotes that writes the result to a variable
+     REG (the size is optional if REG is a known target register);
+     :stores PTR SIZE? denotes that the intrinsic is storing output of
+     the given SIZE in bits at the memory location pointer by PTR.
+     When SIZE is omitted, it defaults to the data address size of the
+     target. The :result parameter may occur at most once. All other
+     parameters can be repeated. The intrinisic output is passed via
+     the intrinisic:y0,...,intrinisic:yM vector, with the first
+     element assigned to the :result, then to all :writes registers,
+     and after that to all :stores addresses.";
+
+    "fabs", tuple [any] @-> any,
+    "(fabs X) is the absolute value of the floating-point number X" ;
+
+    "fsqrt", tuple [sym; any] @-> any,
+    "(fsqrt M X) is the floating-point number closest to R s.t. R*R=X,
+    The rounding mode M defines which representable floating-number is
+    closest to R.";
+
+    "fround", tuple [sym; any] @-> any,
+    "(fround M X) rounds X to the closest integral floating-point
+    number, using the rounding mode M";
+
+    "cast-float", tuple [sym; int; any] @-> any,
+    "(cast-float M S X) converts an unsigned integer X to the nearest
+    representable floating-point number with size S using the rounding
+    mode M ";
+
+    "cast-sfloat", tuple [sym; int; any] @-> any,
+    "(cast-sfloat M S X) converts a signed integer X to the nearest
+    representable floating-point number with size S using the rounding
+    mode M";
+
+    "cast-int", tuple [sym; int; any] @-> any,
+    "(cast-float M S X) converts a floating-point number X to the nearest
+    unsigned integer with the size S using the rounding mode M ";
+
+    "cast-sint", tuple [sym; int; any] @-> any,
+    "(cast-float M S X) converts a floating-point number X to the nearest
+    signed integer with the size S using the rounding mode M ";
   ]
 
 type KB.conflict += Illformed of string
@@ -223,35 +384,134 @@ let () = KB.Conflict.register_printer (function
     | _ -> None)
 
 
-let domain = KB.Domain.optional "cst"
-    ~equal:Sexp.equal
-    ~inspect:ident
-
-let eslot = KB.Class.property Theory.Semantics.cls "eff"
-    ~package:"core"
-    ~public:true
-    domain
-
-let pslot = KB.Class.property Theory.Value.cls "val"
-    ~package:"core"
-    ~public:true
-    domain
-
-let var_slot = KB.Class.property Theory.Value.cls "variable"
-    ~package:"core" @@
-  KB.Domain.optional "var"
-    ~equal:Theory.Var.Top.equal
-    ~inspect:Theory.Var.Top.sexp_of_t
 
 let nothing = KB.Value.empty Theory.Semantics.cls
 let size = Theory.Bitv.size
 let forget x = x >>| Theory.Value.forget
 let empty s = Theory.Value.(forget @@ empty s)
-let fresh = KB.Object.create Theory.Program.cls
+let null = KB.Object.null Theory.Program.cls
 let sort = Theory.Value.sort
 let bits x = size @@ sort x
 
-module Primitives(CT : Theory.Core) = struct
+module type Target = sig
+  val target : Theory.Target.t
+end
+
+module Saturate = struct
+  let max_value bits t =
+    let m = Bitvec.modulus bits in
+    let r = Bitvec.(ones mod m) in
+    match t with
+    | `unsigned -> r
+    | `signed -> Bitvec.(r lsr one mod m)
+
+  let show x = Format.printf "%a@." Bitvec.pp x
+
+  let%expect_test "max-value" =
+    show (max_value 8 `signed);
+    [%expect "0x7f"];
+    show (max_value 8 `unsigned);
+    [%expect "0xff"];
+    show (max_value 16 `signed);
+    [%expect "0x7fff"];
+    show (max_value 16 `unsigned);
+    [%expect "0xffff"];
+    show (max_value 32 `signed);
+    [%expect "0x7fffffff"];
+    show (max_value 32 `unsigned);
+    [%expect "0xffffffff"]
+
+  (* given a cast from width src to dst, where src>dst, returns x if
+     the upper src-dst+1 bits are all zeros or ones, otherwise retuns
+     u+msb(x), where u is the largest positive integer represented by
+     dst. Note that msb is encoded as (x lsr (src-1) & 1).
+
+     Note, the implementation doesn't use simple if/then/else as it
+     follows the non-static implementation. The generated code is more
+     efficient as it has less ite's and no inequality comparisons,
+     which makes it easier to (symbolically) analyze. *)
+
+  let static_signed src dst x =
+    assert (dst < src);
+    let module B = (val Bitvec.modular src) in
+    let ubits = B.(x asr int Int.(dst - 1)) in
+    if Bitvec.(ubits = zero || B.lnot ubits = zero)
+    then
+      let mask = B.(one lsl int dst - one) in
+      B.(x land mask)
+    else
+      let u = max_value dst `signed in
+      B.(u + ((x lsr int Int.(src-1)) land one))
+
+  let%expect_test "static-signed" =
+    show (static_signed 32 8 Bitvec.M32.(int 10000));
+    [%expect {| 0x7f |}];
+    show (static_signed 32 8 Bitvec.M32.(int 128));
+    [%expect {| 0x7f |}];
+    show (static_signed 32 8 Bitvec.M32.(int 127));
+    [%expect {| 0x7f |}];
+    show (static_signed 32 8 Bitvec.M32.(int 42));
+    [%expect {| 0x2a |}];
+    show (static_signed 32 8 Bitvec.M32.one);
+    [%expect {| 0x1 |}];
+    show (static_signed 32 8 Bitvec.M32.zero);
+    [%expect {| 0x0 |}];
+    show (static_signed 32 8 Bitvec.M32.(int (-1)));
+    [%expect {| 0xff |}];
+    show (static_signed 32 8 Bitvec.M32.(int (-42)));
+    [%expect {| 0xd6 |}];
+    show (static_signed 32 8 Bitvec.M32.(int (-127)));
+    [%expect {| 0x81 |}];
+    show (static_signed 32 8 Bitvec.M32.(int (-128)));
+    [%expect {| 0x80 |}];
+    show (static_signed 32 8 Bitvec.M32.(int (-129)));
+    [%expect {| 0x80 |}];
+    show (static_signed 32 8 Bitvec.M32.(int (-10000)));
+    [%expect {| 0x80 |}]
+
+  let static_unsigned src dst x =
+    let module B = (val Bitvec.modular src) in
+    let module D = (val Bitvec.modular dst) in
+    let ubits = B.(x asr int dst) in
+    if Bitvec.(ubits = zero)
+    then x
+    else
+      let u = max_value dst `unsigned in
+      let is_neg = B.((x lsr int Int.(src-1)) land one) in
+      D.(u + is_neg)
+
+  let%expect_test "static-unsigned" =
+    show (static_unsigned 32 8 Bitvec.M32.(int 10000));
+    [%expect {| 0xff |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int 256));
+    [%expect {| 0xff |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int 255));
+    [%expect {| 0xff |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int 127));
+    [%expect {| 0x7f |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int 42));
+    [%expect {| 0x2a |}];
+    show (static_unsigned 32 8 Bitvec.M32.one);
+    [%expect {| 0x1 |}];
+    show (static_unsigned 32 8 Bitvec.M32.zero);
+    [%expect {| 0x0 |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int (-1)));
+    [%expect {| 0x0 |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int (-42)));
+    [%expect {| 0x0 |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int (-127)));
+    [%expect {| 0x0 |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int (-128)));
+    [%expect {| 0x0 |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int (-129)));
+    [%expect {| 0x0 |}];
+    show (static_unsigned 32 8 Bitvec.M32.(int (-10000)));
+    [%expect {| 0x0 |}]
+
+end
+
+module Primitives(CT : Theory.Core)(T : Target) = struct
+  open T
 
   let rec seq = function
     | [] -> CT.perform Theory.Effect.Sort.bot
@@ -283,6 +543,8 @@ module Primitives(CT : Theory.Core) = struct
   let set_const v x =
     KB.Value.put Primus.Lisp.Semantics.static v (Some x)
   let const_int s x = CT.int s x >>| fun v -> set_const v x
+  let set_sym n v =
+    KB.Value.put Primus.Lisp.Semantics.symbol v (Some n)
   let int s x = const_int s @@ Bitvec.(int x mod modulus (size s))
   let true_ = CT.b1 >>| fun v -> set_const v Bitvec.one
   let false_ = CT.b0 >>| fun v -> set_const v Bitvec.zero
@@ -330,18 +592,22 @@ module Primitives(CT : Theory.Core) = struct
 
   let nbitv = KB.List.map ~f:bitv
 
-  let join_types s xs =
+  let join s xs =
     List.max_elt xs ~compare:(fun x y ->
         let xs = sort x and ys = sort y in
         Theory.Bitv.(compare_int (size xs) (size ys))) |> function
     | None -> s
     | Some v -> sort v
 
-  let with_nbitv s xs f = match xs with
+  let first s = function
+    | [] -> s
+    | x::_ -> sort x
+
+  let with_nbitv s cast xs f = match xs with
     | [] -> f s []
     | xs ->
       nbitv xs >>= fun xs ->
-      f (join_types s xs) xs
+      f (cast s xs) xs
 
   type 'a bitv = 'a Theory.Bitv.t Theory.Value.sort
 
@@ -349,17 +615,19 @@ module Primitives(CT : Theory.Core) = struct
     if Theory.Value.Sort.same (Theory.Value.sort x) s then !!x
     else match const x with
       | Some x -> const_int s x
-      | None -> CT.cast s CT.b0 !!x
+      | None -> CT.signed s !!x
 
-  let monoid s sf df init xs =
-    with_nbitv s xs @@ fun s xs -> match xs with
-    | [] -> forget@@const_int s init
+  let monoid s cast sf df init xs =
+    with_nbitv s cast xs @@ fun s xs ->
+    let m = Z.modulus (size s) in
+    match xs with
+    | [] -> forget@@const_int s Z.(init mod m)
     | x :: xs ->
       let* init = coerce s x in
       KB.List.fold ~init xs ~f:(fun res x ->
           match const res, const x with
           | Some res, Some x ->
-            const_int s@@sf res x
+            const_int s Z.(sf res x mod m)
           | _ ->
             let* x = coerce s x in
             df !!res !!x) |>
@@ -391,12 +659,13 @@ module Primitives(CT : Theory.Core) = struct
 
   let order sf df xs = forget@@is_ordered sf df xs
 
-  let all sf df xs =
+  let all s cast sf df xs =
     true_ >>= fun init ->
+    with_nbitv s cast xs @@ fun s xs ->
+    let m = Z.modulus (size s) in
     KB.List.fold ~init xs ~f:(fun r x ->
-        bitv x >>= fun x ->
         let r' = match const x with
-          | Some x -> const_bool (sf x)
+          | Some x -> const_bool Z.(sf x m)
           | None -> df !!x in
         r' >>= fun r' ->
         r &&& r') |>
@@ -411,24 +680,31 @@ module Primitives(CT : Theory.Core) = struct
   let pure res = full (seq []) res
 
   let ctrl eff =
-    let* lbl = fresh in
-    CT.blk lbl (seq []) eff
+    CT.blk null (seq []) eff
 
   let data eff =
-    let* lbl = fresh in
-    CT.blk lbl eff (seq [])
+    CT.blk null eff (seq [])
 
   let memory eff res =
-    let* lbl = fresh in
-    full CT.(blk lbl (perform eff) skip) res
+    full CT.(blk null (perform eff) skip) res
+
+  let nop () =
+    CT.perform Theory.Effect.Sort.bot
 
   let loads = memory Theory.Effect.Sort.rmem
   let stores = memory Theory.Effect.Sort.wmem
   let loads = pure
 
-  let is_negative x = CT.msb x
-  let is_positive x =
-    CT.(and_ (non_zero x) (inv (is_negative x)))
+
+  let d_is_negative x = CT.msb x
+  let d_is_positive x =
+    CT.(and_ (non_zero x) (inv (d_is_negative x)))
+
+  let s_is_negative x m = Z.(msb x mod m)
+  let s_is_positive x m =
+    not (Z.(s_is_negative x m) && Z.equal x Z.zero)
+  let s_is_zero x _ =
+    Z.equal x Z.zero
 
   let word_width s xs =
     nbitv xs >>= fun xs ->
@@ -446,6 +722,19 @@ module Primitives(CT : Theory.Core) = struct
     | Some bitv ->
       Theory.Label.for_addr bitv >>= fun dst ->
       CT.goto dst
+
+  let goto_subinstruction lbl xs =
+    let open Bap.Std in
+    unary xs >>= bitv >>= fun dst ->
+    match const dst with
+    | None -> CT.jmp !!dst
+    | Some dst ->
+      KB.collect Insn.Seqnum.slot lbl >>= function
+      | None -> illformed "not a subinstruction"
+      | Some pos ->
+        let dst = Bitvec.to_int dst + pos in
+        Bap.Std.Insn.Seqnum.label dst >>=
+        CT.goto
 
   let load_byte t xs =
     let mem = CT.var @@ Theory.Target.data t in
@@ -468,7 +757,7 @@ module Primitives(CT : Theory.Core) = struct
     unary xs >>= bitv >>= fun addr ->
     forget@@CT.(loadw s b mem !!addr)
 
-  let load_word = word_loader ident
+  let load_word = word_loader Fn.id
   let load_half = word_loader (fun s -> s / 2)
   let load_double = word_loader @@ ( * ) 2
   let load_quad = word_loader @@ ( * ) 4
@@ -528,13 +817,14 @@ module Primitives(CT : Theory.Core) = struct
     | Some v -> forget@@const_int (sort x) v
 
   let apply_static s x =
-    let m = Bitvec.modulus (Theory.Bitv.size s) in
+    let m = Bitvec.modulus (size s) in
     forget@@const_int s Bitvec.(x mod m)
 
   let lnot x =
     bitv x >>= fun x -> match const x with
     | None -> forget@@CT.not !!x
-    | Some v -> apply_static (sort x) (Bitvec.lnot v)
+    | Some v ->
+      apply_static (sort x) (Bitvec.lnot v)
 
   let one_op_x sop dop x =
     bitv x >>= fun x -> match const x with
@@ -545,25 +835,216 @@ module Primitives(CT : Theory.Core) = struct
   let sreciprocal = one_op_x Bitvec.sdiv CT.sdiv
 
   let get_pc s lbl =
-    KB.collect Primus.Lisp.Semantics.definition lbl >>= function
+    KB.collect Theory.Label.addr lbl >>= function
     | None -> !!(empty s)
-    | Some lbl -> KB.collect Theory.Label.addr lbl >>= function
-      | None -> !!(empty s)
-      | Some addr -> forget@@const_int s addr
+    | Some addr -> forget@@const_int s addr
 
-  let set_symbol v x =
-    match KB.Value.get var_slot v with
-    | Some var ->
-      CT.set var !!x
-    | None ->
-      illformed "set-variable (set$) requires a value reified to a variable"
+  let require_symbol v k =
+    match symbol v with
+    | Some name -> k name
+    | None -> illformed "not a symbolic value"
 
-  let symbol s v =
-    match KB.Value.get var_slot v with
-    | Some var ->
-      intern (Theory.Var.name var) >>= const_int s |> forget
+  let possibly_register target v =
+    require_symbol v @@ fun v ->
+    match Theory.Target.var target v with
+    | Some v -> !!v
     | None ->
-      illformed "symbol requires a value reified to a variable"
+      let s = Theory.Bitv.define (Theory.Target.bits target) in
+      KB.return @@ Theory.Var.forget (Theory.Var.define s v)
+
+  let set_symbol t v x =
+    let* var = possibly_register t v in
+    let x = KB.Value.refine x (Theory.Var.sort var) in
+    CT.set var !!x
+
+  let unquote t v =
+    let* v = possibly_register t v in
+    forget @@
+    CT.var v
+
+  let alias_base_register target v =
+    let* r = possibly_register target v in
+    match Theory.Target.unalias target r with
+    | None ->
+      illformed "the register %a is not an alias in %a"
+        Theory.Var.pp r Theory.Target.pp target
+    | Some origin -> match Theory.Origin.cast_sub origin with
+      | None ->
+        illformed "the aliased register %a is not a subregister"
+          Theory.Var.pp r
+      | Some origin ->
+        let reg = Theory.Origin.reg origin in
+        let name = Theory.Var.name reg in
+        forget @@
+        CT.var reg >>| fun v ->
+        KB.Value.put Primus.Lisp.Semantics.symbol v (Some name)
+
+  module Intrinsic = struct
+    type param =
+      | Inputs
+      | Result
+      | Writes
+      | Stores
+      | Aborts
+    [@@deriving equal, compare, sexp, variants]
+
+    type arg = unit Theory.value
+
+    let sexp_of_arg v =
+      Sexp.Atom (Format.asprintf "%a" KB.Value.pp v)
+
+    type args = (param * arg list) list [@@deriving sexp_of]
+
+    let params = [
+      (* skip inputs as they are passed directly *)
+      ":result", result;
+      ":writes", writes;
+      ":stores", stores;
+      ":aborts", aborts;
+    ]
+
+
+    let parse_param input =
+      Option.(symbol input >>=
+              List.Assoc.find ~equal:String.equal params)
+
+    let parse_args args =
+      List.fold args ~init:([],[],Inputs) ~f:(fun (parsed,current,state) v ->
+          match parse_param v with
+          | Some state' ->
+            let parsed = (state,List.rev current) :: parsed in
+            (parsed,[],state')
+          | None -> (parsed,v::current,state))
+      |> fun (parsed,last,state) ->
+      List.rev ((state, List.rev last) :: parsed)
+
+    let get kw args =
+      List.Assoc.find ~equal:equal_param args kw |> function
+      | None -> []
+      | Some args -> args
+
+    let get kw =
+      List.filter_map ~f:(fun (k,v) ->
+          Option.some_if (equal_param k kw) v)
+
+    let result x = get result x
+    let writes x = get writes x
+    let stores x = get stores x
+    let inputs x = List.concat@@get inputs x
+
+    let mk_var d i s =
+      Theory.Var.define s (sprintf "intrinsic:%c%d" d i)
+
+    let ivar = mk_var 'x'
+    let ovar = mk_var 'y'
+
+    let assign_inputs args =
+      seq@@List.mapi (inputs args) ~f:(fun i x ->
+          let s = Theory.Value.sort x in
+          CT.set (ivar i s) !!x)
+
+    let invoke_symbol name =
+      let name = KB.Name.create
+          ~package:"intrinsic"
+          KB.Name.(unqualified@@read name) in
+      let* dst = Theory.Label.for_name (KB.Name.show name) in
+      KB.provide Primus.Lisp.Semantics.name dst (Some name) >>= fun () ->
+      KB.provide Theory.Label.is_subroutine dst (Some true) >>= fun () ->
+      CT.goto dst
+
+    let write_single t i v =
+      require_symbol v @@ fun v ->
+      match Theory.Target.var t v with
+      | None -> illformed ":writes argument is not a register"
+      | Some v ->
+        let s = Theory.Var.sort v in
+        CT.set v @@ CT.var (ovar i s)
+
+    let write_typed t i v =
+      require_symbol v @@ fun v ->
+      let* t = static t in
+      let s = Theory.Value.Sort.forget@@Theory.Bitv.define t in
+      let v = Theory.Var.define s v in
+      CT.set v @@ CT.var (ovar i s)
+
+    let assign_writes t xs =
+      let base = List.length (result xs) in
+      seq@@List.mapi (writes xs) ~f:(fun i -> function
+          | [reg] -> write_single t (base+i) reg
+          | [reg; typ] -> write_typed typ (base+i) reg
+          | _ -> illformed "incorrect :writes parameters")
+
+    let mk_store size t i ptr =
+      let s = Theory.Value.Sort.forget@@Theory.Bitv.define size in
+      let* v = CT.var (ovar i s) in
+      store_word t [ptr; v]
+
+    let store_word t =
+      mk_store (Theory.Target.data_addr_size t) t
+
+    let store t i ptr typ =
+      let* typ = static typ in
+      mk_store typ t i ptr
+
+    let assign_stores t xs =
+      let base = List.length (result xs) + List.length (writes xs) in
+      seq@@List.mapi (stores xs) ~f:(fun i -> function
+          | [ptr] -> store_word t (base+i) ptr
+          | [ptr; typ] -> store t (base+i) ptr typ
+          | _ -> illformed "incorrect :stores parameters")
+
+    let make_result size =
+      let* size = static size in
+      let s = Theory.Value.Sort.forget@@Theory.Bitv.define size in
+      CT.var@@ovar 0 s
+
+
+    let call t name args =
+      require_symbol name @@ fun name ->
+      let args = parse_args args in
+      let eff = seq [
+          data@@assign_inputs args;
+          ctrl@@invoke_symbol name;
+          data@@assign_writes t args;
+          data@@assign_stores t args;
+        ] in
+      match result args with
+      | [] -> eff
+      | [[t]] -> full eff (make_result t)
+      | _ -> illformed ":result may occur once and with a single argument"
+  end
+
+
+  let make_symbol s name =
+    intern name >>= const_int s >>| set_sym name |> forget
+
+  let symbol_concat s syms =
+    List.map syms ~f:symbol |> Option.all |> function
+    | None -> illformed "require all symbols"
+    | Some syms ->
+      let syms,sep =
+        List.split_while syms ~f:(Fn.non@@String.equal ":sep") in
+      let* sep = match sep with
+        | [] -> KB.return ""
+        | [_; sep] -> KB.return sep
+        | _ -> illformed ":sep must be last and followed by an argument" in
+      make_symbol s (String.concat ~sep syms)
+
+  let mksymbol s v =
+    match symbol v with
+    | Some name -> make_symbol s name
+    | None ->
+      illformed "symbol requires a symbolic value"
+
+  let is_symbol v =
+    forget@@match KB.Value.get Primus.Lisp.Semantics.symbol v with
+    | Some _ -> true_
+    | _ -> false_
+
+  let invoke_subroutine dst =
+    require_symbol dst @@ fun dst ->
+    let* dst = Theory.Label.for_name dst in
+    CT.goto dst
 
   let mk_cast t cast xs =
     binary xs @@ fun sz x ->
@@ -571,8 +1052,8 @@ module Primitives(CT : Theory.Core) = struct
     bitv x >>= fun x -> match const x with
     | None -> forget@@cast s !!x
     | Some v ->
-      let r = Theory.Bitv.size s in
-      let w = Theory.Bitv.size @@ Theory.Value.sort x in
+      let r = size s in
+      let w = size @@ Theory.Value.sort x in
       forget@@const_int s@@match t with
       | `hi -> Bitvec.extract ~hi:(w-1) ~lo:(w-r) v
       | `lo -> Bitvec.extract ~hi:r ~lo:0 v
@@ -582,13 +1063,51 @@ module Primitives(CT : Theory.Core) = struct
           let open Bitvec.Make(struct
               let modulus = Bitvec.modulus r
             end) in
-          (ones lsl int Int.(r - w)) lor v
+          (ones lsl int w) lor v
         else Bitvec.extract ~hi:r ~lo:0 v
 
   let signed = mk_cast `se CT.signed
   let unsigned = mk_cast `lo CT.unsigned
   let low = mk_cast `lo CT.low
   let high = mk_cast `hi CT.high
+
+  module Saturate = struct
+    open Saturate
+    let get_type t =
+      match symbol t with
+      | Some ":signed" -> !!`signed
+      | Some ":unsigned" -> !!`unsigned
+      | _ -> illformed "expected :signed or :unsigned"
+
+    let cast xs =
+      ternary xs @@ fun t sz x ->
+      to_sort sz >>= fun ds ->
+      bitv x >>= fun x ->
+      let ss = sort x in
+      let* t = get_type t in
+      let upper = const_int ss @@ max_value (size ds) t in
+      let hibit = int ss (size ss - 1) in
+      let msbw = CT.(extract ss hibit hibit !!x) in
+      let bound = CT.(add upper msbw) in
+      match const x,t with
+      | None,`signed ->
+        let exp = Theory.Var.scoped ss @@ fun uv ->
+          let lowbits = int ss (size ds - 1) in
+          let ubits = CT.(arshift !!x lowbits) in
+          let cnd = CT.(or_ (is_zero (var uv)) (is_zero (not (var uv)))) in
+          CT.(let_ uv ubits (low ds @@ ite cnd !!x bound)) in
+        forget exp
+      | None,`unsigned ->
+        let bits = int ss (size ds) in
+        let ubits = CT.(arshift !!x bits) in
+        forget@@CT.(low ds @@ ite (is_zero ubits) !!x bound)
+      | Some x,`signed ->
+        forget@@const_int ds @@
+        static_signed (size ss) (size ds) x
+      | Some x,`unsigned ->
+        forget@@const_int ds @@
+        static_unsigned (size ss) (size ds) x
+  end
 
   let extract xs =
     ternary xs @@ fun hi lo x ->
@@ -641,53 +1160,315 @@ module Primitives(CT : Theory.Core) = struct
               CT.append s !!r
                 (CT.extract b1 (int s b) (int s b) !!x))
 
-  let target lbl =
-    KB.collect Primus.Lisp.Semantics.definition lbl >>= function
-    | None -> Theory.Label.target lbl
-    | Some lbl -> Theory.Label.target lbl
+  let bits = Theory.Target.bits target
+
+  let s = Theory.Bitv.define bits
+
+  module SBitvec = struct
+    let compare x y =
+      let module Bitv = Bitvec.Make(struct
+          let modulus = Bitvec.modulus (Theory.Bitv.size s)
+        end) in
+      let x_is_neg = Bitv.msb x and y_is_neg = Bitv.msb y in
+      match x_is_neg, y_is_neg with
+      | true,false -> -1
+      | false,true -> 1
+      | _ -> Bitvec.compare x y
+
+    let (<) x y = compare x y < 0
+    let (>) x y = compare x y > 0
+    let (=) x y = compare x y = 0
+    let (<=) x y = compare x y <= 0
+    let (>=) x y = compare x y >= 0
+  end
+
+
+  module IEEE754 = struct
+    module Host = struct
+      let inj = Fn.compose Int64.float_of_bits Z.to_int64
+      and prj = Fn.compose Z.int64 Int64.bits_of_float
+      and prj64 = Fn.compose Z.M64.int64 Int64.bits_of_float
+
+      let bop op x y = prj (op (inj x) (inj y))
+      let uop op x = prj (op (inj x))
+      let sop op x = prj64 (op (inj x))
+
+      let add = bop ( +. )
+      let sub = bop ( -. )
+      let mul = bop ( *. )
+      let div = bop ( /. )
+      let neg = uop (~-.)
+      let abs = sop Float.abs
+      let sqrt _ = sop Float.sqrt
+
+      let mode_of_key = function
+        | ":rtn" -> `Down
+        | ":rtp" -> `Up
+        | ":rtz" -> `Zero
+        | _ -> `Nearest
+
+      let round dir x =
+        prj64 (Float.round ~dir (inj x))
+
+      let cast_float _ x =
+        prj64 (Float.of_int64 (Z.to_int64 x))
+
+      let cast_int _ x =
+        Z.M64.int64 (Float.to_int64 (inj x))
+
+      let zero = prj 0.0
+      let one = prj 1.0
+
+      let lt x y = Float.(inj x < inj y)
+      let le x y = Float.(inj x <= inj y)
+      let gt x y = Float.(inj x > inj y)
+      let ge x y = Float.(inj x >= inj y)
+      let eq x y = Float.(inj x = inj y)
+
+      let is cls x _ =
+        Float.Class.compare cls (Float.classify (inj x)) = 0
+
+      let is_nan = is Float.Class.Nan
+      let is_zero = is Float.Class.Zero
+      let is_inf = is Float.Class.Infinite
+      let is_finite x s = not (is_nan x s) && not (is_inf x s)
+      let is_pos x _ = Float.(inj x >= 0.0)
+      let is_neg x _ = Float.(inj x <= 0.0)
+    end
+
+    let inj fs x = CT.float fs x
+    and prj = CT.fbits
+
+    let uop op fs x =
+      let* x = inj fs x in
+      let* r = op !!x in
+      prj !!r
+
+    let sop op fs rm x =
+      let* x = inj fs x in
+      let* r = op rm !!x in
+      prj !!r
+
+    let bop op fs rm x y =
+      let* x = inj fs x
+      and* y = inj fs y in
+      let* r = op rm !!x !!y in
+      prj !!r
+
+    let add s = bop CT.fadd s
+    let sub s = bop CT.fsub s
+    let mul s = bop CT.fmul s
+    let div s = bop CT.fdiv s
+    let neg s = uop CT.fneg s
+    let abs s = uop CT.fabs s
+    let sqrt s = sop CT.fsqrt s
+    let round s = sop CT.fround s
+
+    let mode_of_key = function
+      | ":rne" -> KB.return CT.rne
+      | ":rna" -> KB.return CT.rna
+      | ":rtp" -> KB.return CT.rtp
+      | ":rtn" -> KB.return CT.rtn
+      | ":rtz" -> KB.return CT.rtz
+      | unk -> illformed "unrecognized rounding mode: %s" unk
+
+    let with_rmode args k = match args with
+      | [] ->
+        illformed "requires the floating-point rounding mode"
+      | x::xs ->
+        require_symbol x @@ fun key ->
+        let* rm = mode_of_key key in
+        k (Host.mode_of_key key) rm xs
+
+    let with_1bitv xs k = match xs with
+      | [x] ->
+        let* x = bitv x in
+        k (sort x) x
+      | _ ->
+        illformed "floating-point operators require mode and a \
+                   single operand"
+
+    let with_cast_ops xs k = match xs with
+      | [x; y] ->
+        let* x = static x and* y = bitv y in
+        k x y
+      | _ ->
+        let n = List.length xs in
+        illformed
+          "the cast operaton requires rmode and two operands, \
+           but %d %s provided"
+          n (if n > 1 then "were" else "was")
+
+    let fsort size =
+      match Theory.IEEE754.binary size with
+      | None ->
+        illformed "unsupported floating-point IEEE754 format: \
+                   binary%d" size
+      | Some ps -> KB.return @@ Theory.IEEE754.Sort.define ps
+
+    let operator_rm sf df xs =
+      with_rmode xs @@ fun sm rm xs ->
+      with_1bitv xs @@ fun s x ->
+      match const x with
+      | Some x when size s = 64 ->
+        forget@@const_int s (sf sm x)
+      | _ ->
+        let* fs = fsort (size s) in
+        forget@@df fs rm !!x
+
+    let operator sf df x =
+      let* x = bitv x in
+      let s = sort x in
+      match const x with
+      | Some x when size s = 64 ->
+        forget@@const_int s (sf x)
+      | _ ->
+        let* fs = fsort (size s) in
+        forget@@df fs !!x
+
+    let cast_float sf df xs =
+      with_rmode xs @@ fun sm rm xs ->
+      with_cast_ops xs @@ fun ds x ->
+      let sx = sort x in
+      match const x with
+      | Some x when ds = 64 && size sx <= 64 ->
+        let s = Theory.Bitv.define ds in
+        forget@@const_int s (sf sm x)
+      | _ ->
+        let* fs = fsort ds in
+        forget@@df fs rm !!x
+
+    let cast_int sf df xs =
+      with_rmode xs @@ fun sm rm xs ->
+      with_cast_ops xs @@ fun ds x ->
+      let sx = sort x in
+      let* fs = fsort (size sx) in
+      let is = Theory.Bitv.define ds in
+      match const x with
+      | Some x when ds = 64 && size sx = 64 ->
+        forget@@const_int s (sf sm x)
+      | _ ->
+        forget@@df is rm (inj fs !!x)
+
+    let const x fs s rmode =
+      forget@@CT.fbits (CT.cast_float fs rmode (const_int s x))
+
+    let zero = Host.zero,const Z.zero
+    let one = Host.one, const Z.one
+
+    let dynamic s cast df init xs =
+      with_nbitv s cast xs @@ fun s xs ->
+      match xs with
+      | [] -> forget@@init
+      | x :: xs ->
+        let* init = coerce s x in
+        KB.List.fold ~init xs ~f:(fun res x ->
+            let* x = coerce s x in
+            df !!res !!x) |>
+        forget
+
+    let monoid_rm s cast sf df (si,di) args =
+      with_rmode args @@ fun _ rm xs ->
+      with_nbitv s cast xs @@ fun s _ ->
+      let size = size s in
+      let* fs = fsort size in
+      if size = 64
+      then monoid s cast sf (df fs rm) si xs
+      else dynamic s cast (df fs rm) (di fs s rm) xs
+
+    let lt x y =
+      let* s = x>>|sort>>|size>>=fsort in
+      let* x = inj s x
+      and* y = inj s y in
+      CT.forder !!x !!y
+
+    let le x y = CT.inv (lt y x)
+    let gt x y = lt y x
+    let ge x y = CT.inv (lt x y)
+
+    (* right now we support only IEEE754 binary format encodings,
+       which are canonical, i.e., each floating-point number or NaN
+       is represented with exactly one encoding, therefore, equal
+       encodings imply equal numbers. We could use a more generic
+       [and_ (CT.inv (lt x y)) (CT.inv (lt y x))] but it will generate
+       much more code (rough 60 expressions) and will definitely be
+       less readable. *)
+    let eq x y = CT.eq x y
+
+    let case f x =
+      let* s = x>>|sort>>|size>>=fsort in
+      f (inj s x)
+
+    let is_zero = case CT.is_fzero
+    let is_nan = case CT.is_nan
+    let is_inf = case CT.is_inf
+    let is_pos = case CT.is_fpos
+    let is_neg = case CT.is_fneg
+    let is_finite = case CT.is_finite
+
+    module Z = Host
+  end
+
+  module F = IEEE754
 
   let dispatch lbl name args =
-    target lbl >>= fun t ->
-    let bits = Theory.Target.bits t in
-    let module Z = struct
-      include Bitvec.Make(struct
-          let modulus = Bitvec.modulus bits
-        end)
-      let is_zero = Bitvec.equal zero
-      let is_negative = msb
-      let is_positive x =
-        not (is_negative x) && not (is_zero x)
-    end in
-    let s = Theory.Bitv.define bits in
+    let t = target in
     match name,args with
-    | "+",_-> pure@@monoid s Z.add CT.add Z.zero args
+    | "+",_-> pure@@monoid s join Z.add CT.add (Z.int 0) args
     | "-",[x]|"neg",[x] -> pure@@neg x
-    | "-",_-> pure@@monoid s Z.sub CT.sub Z.zero args
-    | "*",_-> pure@@monoid s Z.mul CT.mul Z.one args
+    | "-",_-> pure@@monoid s join Z.sub CT.sub (Z.int 0) args
+    | "*",_-> pure@@monoid s join Z.mul CT.mul (Z.int 1) args
     | "/",[x]-> pure@@reciprocal x
-    | "/",_-> pure@@monoid s Z.div CT.div Z.one args
+    | "/",_-> pure@@monoid s join Z.div CT.div (Z.int 1) args
     | "s/",[x]-> pure@@sreciprocal x
-    | "s/",_-> pure@@monoid s Z.sdiv CT.sdiv Z.one args
-    | "mod",_-> pure@@monoid s Z.rem CT.modulo Z.one args
+    | "s/",_-> pure@@monoid s join Z.sdiv CT.sdiv (Z.int 1) args
+    | "mod",_-> pure@@monoid s join Z.rem CT.modulo (Z.int 1) args
     | "lnot",[x] -> pure@@lnot x
-    | "signed-mod",_-> pure@@monoid s Z.srem CT.smodulo Z.one args
-    | "lshift",_-> pure@@monoid s Z.lshift CT.lshift Z.one args
-    | "rshift",_-> pure@@monoid s Z.rshift CT.rshift Z.one args
-    | "arshift",_-> pure@@monoid s Z.arshift CT.arshift Z.one args
-    | "logand",_-> pure@@monoid s Z.logand CT.logand Z.ones args
-    | "logor",_-> pure@@monoid s Z.logor CT.logor Z.zero args
-    | "logxor",_-> pure@@monoid s Z.logxor CT.logxor Z.zero args
+    | "signed-mod",_-> pure@@monoid s join Z.srem CT.smodulo (Z.int 1) args
+    | "lshift",_-> pure@@monoid s first Z.lshift CT.lshift (Z.int 1) args
+    | "rshift",_-> pure@@monoid s first Z.rshift CT.rshift (Z.int 1) args
+    | "arshift",_-> pure@@monoid s first Z.arshift CT.arshift (Z.int 1) args
+    | "logand",_-> pure@@monoid s join Z.logand CT.logand (Z.int 1) args
+    | "logor",_-> pure@@monoid s join Z.logor CT.logor (Z.int 0) args
+    | "logxor",_-> pure@@monoid s join Z.logxor CT.logxor (Z.int 0) args
+    | "+.",_ -> pure@@F.monoid_rm s join F.Z.add F.add F.zero args
+    | "-.",_ -> pure@@F.monoid_rm s join F.Z.sub F.sub F.zero args
+    | "*.",_ -> pure@@F.monoid_rm s join F.Z.mul F.mul F.one args
+    | "/.",_ -> pure@@F.monoid_rm s join F.Z.div F.div F.one args
+    | "fabs",[x] -> pure@@F.operator F.Z.abs F.abs x
+    | "fsqrt",_ -> pure@@F.operator_rm F.Z.sqrt F.sqrt args
+    | "fround",_ -> pure@@F.operator_rm F.Z.round F.round args
+    | "cast-float",_ -> pure@@F.cast_float F.Z.cast_float CT.cast_float args
+    | "cast-sfloat",_ -> pure@@F.cast_float F.Z.cast_float CT.cast_sfloat args
+    | "cast-int",_ -> pure@@F.cast_int F.Z.cast_int CT.cast_int args
+    | "cast-sint",_ -> pure@@F.cast_int F.Z.cast_int CT.cast_sint args
+    | "<.",_|"forder",_ -> pure@@order F.Z.lt F.lt args
+    | "<=.",_ -> pure@@order F.Z.le F.le args
+    | ">.",_ -> pure@@order F.Z.gt F.gt args
+    | ">=.",_ -> pure@@order F.Z.ge F.ge args
+    | "=.",_ -> pure@@order F.Z.eq F.eq args
     | "=",_-> pure@@order Bitvec.(=) CT.eq args
     | "<",_-> pure@@order Bitvec.(<) CT.ult args
+    | "s<",_ -> pure@@order SBitvec.(<) CT.slt args
     | ">",_-> pure@@order Bitvec.(>) CT.ugt args
+    | "s>",_ -> pure@@order SBitvec.(>) CT.sgt args
     | "<=",_-> pure@@order Bitvec.(<=) CT.ule args
     | ">=",_-> pure@@order Bitvec.(>=) CT.uge args
+    | "s<=",_-> pure@@order SBitvec.(<=) CT.ule args
+    | "s>=",_-> pure@@order SBitvec.(>=) CT.uge args
     | "/=",_| "distinct",_-> pure@@forget@@distinct args
-    | "is-zero",_| "not",_-> pure@@all Bitvec.(equal zero) CT.is_zero args
-    | "is-positive",_-> pure@@all Z.is_positive is_positive args
-    | "is-negative",_-> pure@@all Z.is_negative is_negative args
+    | "is-zero",_| "not",_-> pure@@all s join s_is_zero CT.is_zero args
+    | "is-finite",_ -> pure@@all s join F.Z.is_finite F.is_finite args
+    | "is-nan",_ -> pure@@all s join F.Z.is_nan F.is_nan args
+    | "is-inf",_ -> pure@@all s join F.Z.is_inf F.is_inf args
+    | "is-fzero",_ -> pure@@all s join F.Z.is_zero F.is_zero args
+    | "is-fpos",_ -> pure@@all s join F.Z.is_pos F.is_pos args
+    | "is-fneg",_ -> pure@@all s join F.Z.is_neg F.is_neg args
+    | "is-positive",_-> pure@@all s join s_is_positive d_is_positive args
+    | "is-negative",_-> pure@@all s join s_is_negative d_is_negative args
     | "word-width",_-> pure@@word_width s args
     | "exec-addr",_-> ctrl@@exec_addr args
+    | "goto-subinstruction",_ -> ctrl@@goto_subinstruction lbl args
     | ("load-byte"|"memory-read"),_-> pure@@load_byte t args
     | "load-word",_-> pure@@load_word t args
     | "load-hword",_-> pure@@load_half t args
@@ -698,536 +1479,38 @@ module Primitives(CT : Theory.Core) = struct
     | "store-word",_-> data@@store_word t args
     | "get-program-counter",[]
     | "get-current-program-counter",[] -> pure@@get_pc s lbl
-    | "set-symbol-value",[sym;x] -> data@@set_symbol sym x
-    | "symbol",[x] ->  pure@@symbol s x
+    | "set-symbol-value",[sym;x] -> data@@set_symbol t sym x
+    | "symbol-concat",syms -> pure@@symbol_concat s syms
+    | "symbol",[x] -> pure@@mksymbol s x
+    | "unquote",[x] -> pure@@unquote t x
+    | "is-symbol", [x] -> pure@@is_symbol x
+    | "alias-base-register", [x] -> pure@@alias_base_register t x
     | "cast-low",xs -> pure@@low xs
     | "cast-high",xs -> pure@@high xs
     | "cast-signed",xs -> pure@@signed xs
     | "cast-unsigned",xs -> pure@@unsigned xs
+    | "cast-saturate",xs -> pure@@Saturate.cast xs
     | "extract",xs -> pure@@extract xs
     | "concat", xs -> pure@@concat xs
     | ("select"|"nth"),xs -> pure@@select s xs
+    | "empty",[] -> nop ()
+    | "intrinsic",(dst::args) -> Intrinsic.call t dst args
+    | "invoke-subroutine",[dst] -> ctrl@@invoke_subroutine dst
     | _ -> !!nothing
-end
-
-module VarTheory : Theory.Core = struct
-  include Theory.Empty
-  let var v =
-    var v >>| fun x ->
-    KB.Value.put var_slot x (Some (Theory.Var.forget v))
-end
-
-module CST : Theory.Core = struct
-  type t = Sexp.t
-
-
-  let pure s cst = KB.Value.put pslot (Theory.Value.empty s) (Some cst)
-  let eff s cst = KB.Value.put eslot (Theory.Effect.empty s) (Some cst)
-  let data = eff Theory.Effect.Sort.bot
-  let ctrl = eff Theory.Effect.Sort.bot
-  let ret = KB.return
-  let atom s = Sexp.Atom s
-
-  let list = function
-    | [Sexp.Atom op;
-       List ((Atom opx) :: xs);
-       List ((Atom opy) :: ys)]
-      when String.(op = opx && op = opy) ->
-      Sexp.List (Atom op :: List.append xs ys)
-    | [Sexp.Atom op; List ((Atom opx) :: xs); y]
-      when String.(op = opx) ->
-      Sexp.List (Sexp.Atom op :: xs@[y])
-    | [Sexp.Atom op; x; List ((Atom opy) :: ys)]
-      when String.(op = opy) ->
-      Sexp.List (Sexp.Atom op :: x :: ys)
-    | xs -> Sexp.List xs
-
-  let app x xs = list (atom x :: xs)
-
-  let psort = Theory.Value.sort
-  let esort = Theory.Effect.sort
-
-  let (>>->) x f =
-    x >>= fun v ->
-    let s = psort v in
-    f s (KB.Value.get pslot v)
-
-  let (>>|>) x f = x >>-> fun s v -> ret (f s v)
-
-  let (>>->?) x f =
-    x >>= fun v ->
-    let s = psort v in
-    match KB.Value.get pslot v with
-    | None -> ret (Theory.Value.empty s)
-    | Some v -> f s v
-
-
-  let (>>|>?) x f = x >>->? fun s v -> ret (f s v)
-
-  let (>>=>) x f =
-    x >>= fun v ->
-    let s = esort v in
-    f s (KB.Value.get eslot v)
-
-  let (>>=>?) x f =
-    x >>= fun v ->
-    let s = esort v in
-    match KB.Value.get eslot v with
-    | None -> ret (Theory.Effect.empty s)
-    | Some x -> f s x
-
-
-  let empty = Theory.Value.empty
-
-  let unary_s s op x = x >>|> fun _ -> function
-    | None -> empty s
-    | Some v -> pure s @@ app op [v]
-
-  let unary op x = x >>|>? fun s v -> pure s @@ app op [v]
-
-  let monoid_s s op x y =
-    x >>-> fun _ x ->
-    y >>|> fun _ y ->
-    match x, y with
-    | Some x, Some y -> pure s @@ app op [x; y]
-    | _ -> empty s
-
-  let monoid op x y =
-    x >>->? fun s x ->
-    y >>|>? fun _ y ->
-    pure s @@ app op [x; y]
-
-  module Minimal = struct
-    let b0 = ret@@pure Theory.Bool.t (atom "0")
-    let b1 = ret@@pure Theory.Bool.t (atom "1")
-
-    let unk s = ret@@empty s
-
-    let var v =
-      let s = Theory.Var.sort v in
-      ret@@pure s@@atom (Theory.Var.name v)
-
-    let let_ v x y =
-      x >>-> fun _ x ->
-      y >>|> fun s y ->
-      let name = Theory.Var.name v in
-      match x,y with
-      | Some x, Some y ->
-        pure s@@app "let" [atom name; x; y]
-      | _ -> empty s
-
-    let ite c x y =
-      c >>-> fun _ c ->
-      x >>->? fun s x ->
-      y >>|>? fun _ y -> match c with
-      | None -> empty s
-      | Some c -> pure s@@app "ite" [c; x; y]
-
-    let inv = unary "not"
-    let and_ = monoid "logand"
-    let or_ = monoid "logor"
-    let int s x = ret@@pure s@@atom (Bitvec.to_string x)
-    let msb x = unary_s Theory.Bool.t "msb" x
-    let lsb x = unary_s Theory.Bool.t "lsb" x
-    let neg x = unary "-" x
-    let not x = unary "not" x
-    let add x = monoid "+" x
-    let sub x = monoid "-" x
-    let mul x = monoid "*" x
-    let div x = monoid "/" x
-    let sdiv x = monoid "s/" x
-    let modulo x = monoid "mod" x
-    let smodulo x = monoid "signed-mod" x
-    let logand x = monoid "logand" x
-    let logor x = monoid "logor" x
-    let logxor x = monoid "logxor" x
-
-    let genshift name fill x off =
-      fill >>-> fun _ fill ->
-      x >>-> fun s x ->
-      off >>|> fun _ off ->
-      match fill, x, off with
-      | Some fill, Some x, Some off ->
-        pure s @@ app name [fill; x; off]
-      | _ -> empty s
-    let shiftr x = genshift "shiftr" x
-    let shiftl x = genshift "shiftl" x
-    let sle x = monoid_s Theory.Bool.t "s<=" x
-    let ule x = monoid_s Theory.Bool.t "<" x
-
-
-    let cast s fill exp =
-      fill >>-> fun _ fill ->
-      exp >>|> fun s' x ->
-      let ct = sprintf "%d" @@ Theory.Bitv.size s in
-      match fill, x  with
-      | Some fill, Some x ->
-        if Theory.Value.Sort.same s s'
-        then pure s x
-        else
-          pure s@@list [
-            atom "cast";
-            atom ct;
-            fill;
-            x
-          ]
-      | _ -> empty s
-
-    let concat s xs =
-      List.map xs ~f:(fun x -> x >>|> fun _ -> ident) |>
-      KB.List.all >>| Option.all >>| function
-      | None -> empty s
-      | Some xs -> pure s @@ app "concat" xs
-
-    let append s x y = monoid_s s "append" x y
-
-    let load m x =
-      m >>-> fun s m ->
-      x >>|> fun _ x ->
-      let s = Theory.Mem.vals s in
-      match m, x with
-      | Some m, Some x -> pure s @@ app "load" [m; x]
-      | _ -> empty s
-
-    let store m p x =
-      m >>-> fun s m ->
-      p >>-> fun _ p ->
-      x >>|> fun _ x ->
-      match m, p, x with
-      | Some m, Some p, Some x ->
-        pure s @@ app "store" [m; p; x]
-      | _ -> empty s
-
-    let nil = Theory.Effect.empty Theory.Effect.Sort.bot
-
-    let perform eff = ret (Theory.Effect.empty eff)
-
-    let set v x = x >>|> fun _ x ->
-      match x with
-      | None -> nil
-      | Some x -> data@@app "set" [
-          atom (Theory.Var.name v);
-          x
-        ]
-
-    let jmp x = x >>|> fun _ x -> match x with
-      | None -> nil
-      | Some x -> ctrl@@app "goto" [x]
-
-    let goto dst =
-      KB.collect Theory.Label.addr dst >>= function
-      | Some dst ->
-        ret@@ctrl@@app "goto" [atom (Bitvec.to_string dst)]
-      | None ->
-        KB.Object.repr Theory.Program.cls dst >>= fun dst ->
-        ret@@ctrl@@app "goto" [atom dst]
-
-    let both s xs ys =
-      match xs,ys with
-      | None,None -> ret nil
-      | Some r,None
-      | None, Some r -> ret@@eff s r
-      | Some xs, Some ys ->
-        ret@@eff s@@list [xs; ys]
-
-    let seq xs ys =
-      xs >>=> fun s xs ->
-      ys >>=> fun _ ys ->
-      both s xs ys
-
-    let blk _ xs ys =
-      xs >>=> fun _ xs ->
-      ys >>=> fun _ ys ->
-      both Theory.Effect.Sort.top xs ys
-
-    let repeat cnd body =
-      cnd >>-> fun _ cnd ->
-      body >>=>? fun s body ->
-      match cnd with
-      | None -> ret@@nil
-      | Some cnd ->
-        ret@@eff s@@app "while" [cnd; body]
-
-    let branch cnd yes nay =
-      cnd >>-> fun _ cnd ->
-      yes >>=>? fun s yes ->
-      nay >>=>? fun _ nay ->
-      match cnd with
-      | None -> ret@@nil
-      | Some cnd ->
-        ret@@eff s@@app "if" [cnd; yes; nay]
-  end
-  include Theory.Basic.Make(Minimal)
-
-  let mk_cast name s x =
-    x >>|> fun s' x -> match x with
-    | None -> empty s
-    | Some x ->
-      if Theory.Value.Sort.same s s'
-      then pure s x
-      else pure s@@app name [
-          atom@@sprintf "%d" (Theory.Bitv.size s);
-          x
-        ]
-
-  let high s = mk_cast "high" s
-  let low s = mk_cast "low" s
-  let signed s = mk_cast "signed" s
-  let unsigned s = mk_cast "unsigned" s
-
-  let extract s lo hi x =
-    lo >>-> fun _ lo ->
-    hi >>-> fun _ hi ->
-    x >>|> fun _ x ->
-    match lo,hi,x with
-    | Some lo, Some hi, Some x ->
-      pure s@@app "extract" [lo; hi; x]
-    | _ -> empty s
-
-  let loadw s dir mem ptr =
-    dir >>-> fun _ dir ->
-    mem >>-> fun _ mem ->
-    ptr >>|> fun _ ptr ->
-    match dir,mem,ptr with
-    | Some dir, Some mem, Some ptr ->
-      pure s@@app "loadw" [
-        atom@@sprintf "%d" (Theory.Bitv.size s);
-        dir;
-        mem;
-        ptr
-      ]
-    | _ -> empty s
-
-  let storew dir mem ptr exp =
-    dir >>-> fun _ dir ->
-    mem >>-> fun s mem ->
-    ptr >>-> fun _ ptr ->
-    exp >>|> fun _ exp ->
-    match Option.all [dir; mem; ptr; exp] with
-    | Some args -> pure s@@app "storew" args
-    | _ -> empty s
-
-  let mk_shift name x m =
-    x >>->? fun s x ->
-    m >>|> fun _ -> function
-    | None -> empty s
-    | Some m -> pure s@@app name [x; m]
-
-  let arshift x = mk_shift "arshift" x
-  let rshift x = mk_shift "rshift" x
-  let lshift x = mk_shift "lshift" x
-  let eq x = monoid_s Theory.Bool.t "=" x
-  let neq x = monoid_s Theory.Bool.t "/=" x
-  let slt x = monoid_s Theory.Bool.t "s<" x
-  let ult x = monoid_s Theory.Bool.t "<" x
-  let sgt x = monoid_s Theory.Bool.t "s>" x
-  let ugt x = monoid_s Theory.Bool.t ">" x
-  let sge x = monoid_s Theory.Bool.t "s>=" x
-  let uge x = monoid_s Theory.Bool.t ">=" x
-
-  let asort s =
-    atom@@Format.asprintf "%a" Theory.Value.Sort.pp (Theory.Value.Sort.forget s)
-
-
-  let wellknown = Theory.IEEE754.[
-      binary16,  ":b16";
-      binary32,  ":b32";
-      binary64,  ":b64";
-      binary80,  ":b80";
-      binary128, ":b128";
-      decimal32, ":d32";
-      decimal64, ":d64";
-      decimal128, ":d128";
-    ]
-
-  let format s =
-    let s = Theory.Value.Sort.forget s in
-    match Theory.Float.(refine s) with
-    | None -> asort s
-    | Some s ->
-      List.find_map wellknown ~f:(fun (par,name) ->
-          let s' = Theory.IEEE754.Sort.define par in
-          if Theory.Value.Sort.same s s'
-          then Some (atom name)
-          else None) |> function
-      | Some s -> s
-      | None -> asort s
-
-
-
-  let float s x =
-    x >>|> fun _ x -> match x with
-    | None -> empty s
-    | Some x -> pure s@@app "float" [format s; x]
-
-  let fbits x =
-    x >>|> fun s x ->
-    let s = Theory.Float.bits s in
-    match x with
-    | None -> empty s
-    | Some x -> pure s@@app "fbits" [x]
-
-  let is_finite x = unary_s Theory.Bool.t "is-finite" x
-  let is_nan x = unary_s Theory.Bool.t "is-nan" x
-  let is_inf x = unary_s Theory.Bool.t "is-inf" x
-  let is_fzero x = unary_s Theory.Bool.t "is-fzero" x
-  let is_fpos x = unary_s Theory.Bool.t "is-fpos" x
-  let is_fneg x = unary_s Theory.Bool.t "is-fneg" x
-
-  let rmode s = ret@@pure Theory.Rmode.t @@ atom s
-  let rne = rmode ":rne"
-  let rna = rmode ":rna"
-  let rtp = rmode ":rtp"
-  let rtn = rmode ":rtn"
-  let rtz = rmode ":rtz"
-  let requal = eq
-
-  let mk_fcast name s m x =
-    m >>-> fun _ m ->
-    x >>|> fun _ x ->
-    match m,x with
-    | Some m, Some x -> pure s@@app name [m;x]
-    | _ -> empty s
-
-  let cast_float s = mk_fcast "cast-float" s
-  let cast_sfloat s = mk_fcast "cast-sfloat" s
-  let cast_int s = mk_fcast "cast-int" s
-  let cast_sint s = mk_fcast "cast-sint" s
-
-  let fneg x = unary "fneg" x
-  let fabs x = unary "fabs" x
-
-  let monoid_f name m x y =
-    x >>->? fun s x ->
-    y >>->? fun _ y ->
-    m >>|> fun _ m ->
-    match m with
-    | None -> empty s
-    | Some m -> pure s@@app name [m; x; y]
-
-  let unary_f name m x =
-    x >>->? fun s x ->
-    m >>|> fun _ m ->
-    match m with
-    | None -> empty s
-    | Some m -> pure s@@app name [m; x]
-
-  let ternary_f name m x y z =
-    x >>->? fun s x ->
-    y >>->? fun _ y ->
-    z >>->? fun _ z ->
-    m >>|> fun _ m ->
-    match m with
-    | None -> empty s
-    | Some m -> pure s@@app name [m; x; y; z]
-
-  let binary_fi name m f x =
-    f >>->? fun s f ->
-    m >>-> fun _ m ->
-    x >>|> fun _ x ->
-    match m,x with
-    | Some m, Some x -> pure s@@app name [m; f; x]
-    | _ -> empty s
-
-
-  let fadd m = monoid_f "+." m
-  let fsub m = monoid_f "-." m
-  let fmul m = monoid_f "*." m
-  let fdiv m = monoid_f "/." m
-  let fmodulo m = monoid_f "mod." m
-  let fsqrt m = unary_f "fsqrt" m
-  let fround m = unary_f "fround" m
-  let fmad m = ternary_f "fmad" m
-  let fsucc x = unary "fsucc" x
-  let fpred x = unary "fpred" x
-  let forder x = monoid_s Theory.Bool.t "forder" x
-
-  let fconvert s m x =
-    m >>-> fun _ m ->
-    x >>|> fun _ x ->
-    match m,x with
-    | Some m, Some x -> pure s@@app "fconvert" [
-        format s; m; x
-      ]
-    | _ -> empty s
-
-  let pow m = monoid_f "pow" m
-  let hypot m = monoid_f "hypot" m
-
-  let rsqrt m = unary_f "rsqrt" m
-  let exp m = unary_f "exp" m
-  let expm1 m = unary_f "expm1" m
-  let exp2 m = unary_f "exp2" m
-  let exp2m1 m = unary_f "exp2m1" m
-  let exp10 m = unary_f "exp10" m
-  let exp10m1 m = unary_f "exp10m1" m
-  let log m = unary_f "log" m
-  let log2 m = unary_f "log2" m
-  let log10 m = unary_f "log10" m
-  let logp1 m = unary_f "logp1" m
-  let log2p1 m = unary_f "log2p1" m
-  let log10p1 m = unary_f "log10p1" m
-  let sin m = unary_f "sin" m
-  let cos m = unary_f "cos" m
-  let tan m = unary_f "tan" m
-  let sinpi m = unary_f "sinpi" m
-  let cospi m = unary_f "cospi" m
-  let atanpi m = unary_f "atanpi" m
-  let atan2pi m = monoid_f "atan2pi" m
-  let asin m = unary_f "asin" m
-  let acos m = unary_f "acos" m
-  let atan m = unary_f "atan" m
-  let atan2 m = monoid_f "atan2" m
-  let sinh m = unary_f "sinh" m
-  let cosh m = unary_f "cosh" m
-  let tanh m = unary_f "tanh" m
-  let asinh m = unary_f "asinh" m
-  let acosh m = unary_f "acosh" m
-  let atanh m = unary_f "atanh" m
-
-  let compound m = binary_fi "compound" m
-  let rootn m = binary_fi "rootn" m
-  let pown m = binary_fi "pown" m
 end
 
 module Lisp = Primus.Lisp.Semantics
 
-let enable_var_theory () =
-  Theory.declare ~provides:["primus-lisp"; "lisp"]
-    ~package:"core"
-    ~name:"vars"
-    ~desc:"tracks terms that are variables"
-    (KB.return (module VarTheory : Theory.Core))
-
 let provide () =
-  KB.Rule.(begin
-      declare "primus-lisp-core-primitives" |>
-      require Lisp.name |>
-      require Lisp.args |>
-      provide Theory.Semantics.slot |>
-      comment "implements semantics for the core primitives"
-    end);
   List.iter export ~f:(fun (name,types,docs) ->
-      Primus.Lisp.Semantics.declare ~types ~docs ~package:"core" name);
-  enable_var_theory ();
-  let (let*?) x f = x >>= function
-    | None -> !!nothing
-    | Some x -> f x in
-  KB.promise Theory.Semantics.slot @@ fun obj ->
-  let*? name = KB.collect Lisp.name obj in
-  let*? args = KB.collect Lisp.args obj in
-  if String.equal (KB.Name.package name) "core"
-  then
-    Theory.instance () >>= Theory.require >>= fun (module CT) ->
-    let module P = Primitives(CT) in
-    KB.catch (P.dispatch obj (KB.Name.unqualified name) args) @@ function
-    | Illformed err ->
-      KB.fail (Failed_primitive (name,args,err))
-    | other -> KB.fail other
-  else !!nothing
-
-
-let enable_extraction () =
-  Theory.declare ~provides:["extraction"; "primus-lisp"; "lisp"]
-    ~package:"core"
-    ~name:"syntax" (KB.return (module CST : Theory.Core))
+      Primus.Lisp.Semantics.declare ~types ~docs ~package:"core" name
+        ~body:(fun target ->
+            Theory.instance () >>= Theory.require >>= fun (module CT) ->
+            let module Target = struct let target = target end in
+            let module P = Primitives(CT)(Target) in
+            KB.return @@ fun obj args ->
+            KB.catch (P.dispatch obj name args) @@ function
+            | Illformed err ->
+              let name = KB.Name.create ~package:"core" name in
+              KB.fail (Failed_primitive (name,args,err))
+            | other -> KB.fail other))

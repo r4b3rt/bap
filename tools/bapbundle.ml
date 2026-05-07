@@ -1,6 +1,9 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_bundle.Std
 open Format
+
+
+module Sys = Caml.Sys
 
 open Manifest.Fields
 
@@ -9,6 +12,7 @@ exception Target_unspecified
 exception Target_is_directory
 exception Target_doesn't_exist
 exception Destdir_is_not_a_dir
+exception Target_not_installed
 
 let target = ref ""
 let manifest = ref (Manifest.create "")
@@ -178,7 +182,7 @@ module Show = struct
 
   let show_files k m b =
     let choose = match k with
-      | `libraries when libraries.contents -> ident
+      | `libraries when libraries.contents -> Fn.id
       | `resources when resources.contents -> not
       | _ -> fun _ -> false in
     let is_library name =
@@ -219,14 +223,15 @@ module Remove = struct
     if String.is_empty target.contents then raise Target_unspecified;
     let file = normalized @@ Filename.concat !destdir !target in
     if Sys.file_exists file
-    then Sys.remove file
+    then FileUtil.rm ~recurse:true [file]
+    else raise Target_not_installed
 end
 
 
 let args = ref []
 
 let parse = ref ignore
-let main = ref ident
+let main = ref Fn.id
 
 module type Command = sig
   val args : (string * Arg.spec * string) list
@@ -299,6 +304,8 @@ let () =
     error "The provided bundle file is either malformed or is not a bundle"
   | Destdir_is_not_a_dir ->
     error "The destination should be a directory, not a file"
+  | Target_not_installed ->
+    error "The specified plugin is not installed"
   | Sys_error err ->
     error "%s" err
   | exn ->

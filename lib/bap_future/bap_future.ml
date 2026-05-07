@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Monads.Std
 
 module Std = struct
@@ -517,7 +517,7 @@ module Std = struct
       let rec drop n =
         if n < num then match Queue.peek q with
           | Some _ ->
-            Queue.dequeue_exn q;
+            ignore (Queue.dequeue_exn q);
             drop (n + 1)
           | _ -> n
         else n in
@@ -555,7 +555,7 @@ module Std = struct
       link xs s' (fun x -> push' (snd (f x)));
       s,s'
 
-    let unzip xs = split xs ~f:ident
+    let unzip xs = split xs ~f:Fn.id
 
     let frame ~clk dat ~init ~f =
       let s = sync ~clk dat in

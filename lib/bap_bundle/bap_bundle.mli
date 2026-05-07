@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 
 module Std : sig
 
@@ -10,6 +10,7 @@ module Std : sig
       directory. The name of the bundle is a basename of
       [Sys.executable_name] with a [bundle] extension.  *)
   val main_bundle : unit -> bundle
+
 
   (**/**)
 
@@ -58,9 +59,14 @@ module Std : sig
       ?cons:string list -> string -> t
 
     include Stringable with type t := t
+
+    val current : unit -> t
+    val update : t -> unit
+    val switch : t -> t
   end
 
   type manifest = Manifest.t
+
 
 
   (** Program Bundle.

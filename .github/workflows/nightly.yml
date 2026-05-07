@@ -1,0 +1,77 @@
+name: nightly
+run-name: Running nightly tests on ${{ github.sha }}
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Every day at 06:00 UTC, 2 am EDT
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+        ocaml-compiler:
+          - 4.14.x
+          - 4.08.x
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      OPAMJOBS: 2
+      OPAMRETRES: 8
+
+    steps:
+      - name: Checkout the Tests
+        uses: actions/checkout@v4
+        with:
+          repository: BinaryAnalysisPlatform/bap
+          path: bap
+
+      - name: Install Ghidra
+        uses: ./bap/.github/actions/install-ghidra
+        with:
+          path: ./bap
+
+      - name: Install Extra System Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install dejagnu -y
+
+      - name: Use OCaml ${{ matrix.ocaml-compiler }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+          dune-cache: ${{  matrix.os != 'macos-latest' }}
+          opam-pin: false
+          opam-disable-sandboxing: true
+          opam-repositories: |
+            default: git+https://github.com/ocaml/opam-repository.git
+            bap: git+https://github.com/BinaryAnalysisPlatform/opam-repository#testing
+
+      - name: Build and Install BAP
+        run: opam install bap.master bap-extra.master bap-radare2.master
+
+      - name: Run Functional Tests
+        run: opam exec -- make -C bap check
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: opam-log-${{ matrix.os }}-${{ matrix.ocaml-compiler }}
+          path: ~/.opam/log
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: bap-log-nightly-${{ matrix.os }}-${{ matrix.ocaml-compiler }}
+          path: ~/.local/state/bap
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: fun-tests-log-nightly-${{ matrix.os }}-${{ matrix.ocaml-compiler }}
+          path: |
+            bap/testsuite/*.log
+            bap/testsuite/logs

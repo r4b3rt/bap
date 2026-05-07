@@ -63,7 +63,7 @@ following interpretations:
 ```
 |}
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Result.Monad_infix
 open Format
@@ -73,6 +73,11 @@ module BW = Bap_byteweight.Bytes
 module Sigs = Bap_byteweight_signatures
 module Digest = Caml.Digest
 module Config = Extension.Configuration
+module Sys = Caml.Sys
+
+(* we still have to update this tool to support modern bap *)
+let sigs_load = Sigs.load[@warning "-D"]
+let sigs_save = Sigs.save[@warning "-D"]
 
 type failure =
   | Image of Error.t
@@ -114,7 +119,7 @@ let load_or_create_signatures ?comp ?path operation arch =
   match operation with
   | `rewrite -> Ok (BW.create ())
   | operation ->
-    match Sigs.load ?comp ?path ~mode:"bytes" arch, operation with
+    match sigs_load ?comp ?path ~mode:"bytes" arch, operation with
     | Ok s,_ -> Ok (Binable.of_string (module BW) (Bytes.to_string s))
     | Error (`No_entry _|`No_signatures), `update ->
       Ok (BW.create ())
@@ -138,7 +143,7 @@ let train_on_file loader comp operation max_length db path =
   load_or_create_signatures ?comp ~path:db operation arch >>= fun bw ->
   Seq.iter (code_of_image img) ~f:(BW.train bw ~max_length oracle);
   with_sigs_error @@
-  Sigs.save ?comp ~mode:"bytes" ~path:db arch @@
+  sigs_save ?comp ~mode:"bytes" ~path:db arch @@
   Bytes.of_string @@
   Binable.to_string (module BW) bw
 

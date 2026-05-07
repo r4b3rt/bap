@@ -1,10 +1,13 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
+open Bap_core_theory
 open Bap.Std
 open Bap_c_type
 open Monads.Std
 
-module Attrs = Bap_c_term_attributes
+include Self()
 
+module Attrs = Bap_c_term_attributes
+module Data = Bap_c_data
 type ctype = t
 
 let is_const p = p.Spec.qualifier.Qualifier.const
@@ -38,7 +41,7 @@ type error = [
 ] [@@deriving sexp_of]
 
 let sexp_of_exp exp = Sexp.Atom (Exp.to_string exp)
-type param = Bap_c_data.t * exp [@@deriving sexp]
+type param = Data.t * exp [@@deriving sexp]
 
 type args = {
   return : param option;
@@ -56,32 +59,95 @@ exception Failed of error [@@deriving sexp_of]
 let fail x = raise (Failed x)
 
 let data (size : #Bap_c_size.base) (t : Bap_c_type.t) =
-  let open Bap_c_data in
+  let open Data in
+  let sizeof t = match size#bits t with
+    | None -> Size.in_bits size#pointer
+    | Some s -> s in
+  let padding pad : Data.t =
+    match Size.of_int_opt pad with
+    | Some pad -> Imm (pad,Set [])
+    | None ->
+      let data : Data.t = Imm (`r8,Set []) in
+      Seq (List.init (pad/8) ~f:(Fn.const data)) in
   let rec data = function
     | `Void -> Seq []
     | `Basic {Spec.t} -> Imm (size#basic t, Top)
     | `Pointer {Spec.t} -> Ptr (data t)
     | `Array {Spec.t={Array.element=t; size=None}} -> Ptr (data t)
     | `Array {Spec.t={Array.element=t; size=Some n}} ->
-      let et = data t in
-      Ptr (Seq (List.init n ~f:(fun _ -> et)))
+      Ptr (Seq (List.init n ~f:(Fn.const (data t))))
     | `Structure {Spec.t={Compound.fields=fs}} ->
-      let _,ss =
-        List.fold fs ~init:(0,[]) ~f:(fun (off,seq) (_,t) ->
-            let off' = match size#bits t with
-              | None -> off + Size.in_bits size#pointer (* or assert false *)
-              | Some sz -> off + sz in
-            match size#padding t off with
-            | None ->  off', data t :: seq
-            | Some pad -> off, data t :: Imm (pad,Set []) :: seq) in
+      List.fold fs ~init:(0,0,[]) ~f:(fun (off,total,seq) (_,t) ->
+          let fsize = sizeof t in
+          let pad = Bap_c_size.padding (size#alignment t) off in
+          off + fsize + pad, total + fsize + pad, match pad with
+          | 0 -> data t :: seq
+          | _ -> data t :: padding pad :: seq) |> fun (_,total,ss) ->
+      let fullsize = sizeof t in
+      let pad = max 0 (fullsize - total) in
+      let ss = if pad = 0 then ss else padding (fullsize-total) :: ss in
       Seq (List.rev ss)
-    | `Union {Spec.t=_} ->
-      let sz = match size#bits t with
-        | None -> Size.in_bits size#pointer
-        | Some sz -> sz in
-      Seq (List.init (sz/8) ~f:(fun _ -> Imm (`r8,Set [])))
+    | `Union _ ->
+      let sz = sizeof t in
+      Seq (List.init (sz/8) ~f:(fun _ -> Imm (`r8,Top)))
     | `Function _ -> Ptr (Imm ((size#pointer :> size),Top)) in
   data t
+
+let layout (size : #Bap_c_size.base) (t : Bap_c_type.t) =
+  let open Data in
+  let sizeof t = match size#bits t with
+    | None -> Size.in_bits size#pointer
+    | Some s -> s in
+  let imm size obj : Data.layout = {layout=Imm(size,obj)}
+  and ptr {layout=data} : Data.layout = {layout=Ptr data}
+  and seq layouts : Data.layout = {
+    layout = Seq (List.map layouts ~f:(fun {layout} -> layout))
+  } in
+  let padding pad : Data.layout = imm pad Undef in
+  let rec layout t : Data.layout = match t with
+    | `Void -> imm 8 Undef
+    | `Basic {Spec.t} -> imm (Size.in_bits (size#basic t)) (Basic t)
+    | `Pointer {Spec.t} -> ptr (layout t)
+    | `Array {Spec.t={Array.element=t; size=None}} -> ptr (layout t)
+    | `Array {Spec.t={Array.element=t; size=Some n}} ->
+      ptr (seq (List.init n ~f:(Fn.const (layout t))))
+    | `Structure {Spec.t={Compound.fields=fs}} ->
+      List.fold fs ~init:(0,0,[]) ~f:(fun (off,total,seq) (name,t) ->
+          let fsize = sizeof t in
+          let pad = Bap_c_size.padding (size#alignment t) off in
+          off + fsize + pad, total + fsize + pad,
+          imm fsize (Field (name,layout t)) ::
+          match pad with
+          | 0 -> seq
+          | _ -> padding pad :: seq) |> fun (_,total,ss) ->
+      let fullsize = sizeof t in
+      let pad = max 0 (fullsize - total) in
+      let ss = if pad = 0 then ss else padding (fullsize-total) :: ss in
+      seq (List.rev ss)
+    | `Union {Spec.t={Compound.fields=fs}} ->
+      let total = sizeof t in
+      let variants = List.map fs ~f:(fun (name,t) ->
+          let fsize = sizeof t in
+          let pad = max 0 (total - fsize) in
+          let field = imm fsize @@ Field (name, layout t) in
+          match pad with
+          | 0 -> field
+          | _ -> seq [field; padding pad]) in
+      imm total (Union variants)
+    | `Function _ -> ptr (imm (Size.in_bits (size#pointer)) Undef) in
+  layout t
+
+let rec size_of_data size : Data.t -> int = function
+  | Imm (size,_) -> Size.in_bits size
+  | Seq xs -> List.sum (module Int) ~f:(size_of_data size) xs
+  | Ptr _ -> Size.in_bits (size#pointer)
+
+let rec size_of_layout size : Data.layout -> int =
+  fun {layout} -> size_of_datum size layout
+and size_of_datum size : _ Data.datum -> int = function
+  | Imm (size,_) -> size
+  | Seq xs -> List.sum (module Int) ~f:(size_of_datum size) xs
+  | Ptr _ -> Size.in_bits (size#pointer)
 
 let array_to_pointer (t : ctype) : ctype =
   match t with
@@ -94,20 +160,69 @@ let decay_arrays : proto -> proto = fun proto -> {
     args = List.Assoc.map ~f:array_to_pointer proto.args;
   }
 
-let create_arg i addr_size intent name t (data,exp) sub =
-  let typ = match data with
-    | Bap_c_data.Imm (sz,_) -> Type.Imm (Size.in_bits sz)
-    | _ -> Type.Imm (Size.in_bits addr_size) in
+let coerce ltyp rtyp exp = match ltyp,rtyp with
+  | Type.Mem _,_| _,Type.Mem _
+  | Type.Unk,_ | _, Type.Unk -> exp
+  | Imm m, Imm n -> match Int.compare m n with
+    | 0 -> exp
+    | 1 -> Bil.(cast signed m exp)
+    | _ -> Bil.(cast low m exp)
+
+
+let create_arg size i intent name t (data,exp) sub =
+  let layout = match data with
+    | Data.Ptr _ ->
+      if Bap_c_type.is_pointer t then layout size t
+      else layout size (Bap_c_type.pointer t)
+    | _ -> layout size t in
+  let ltyp = Type.imm (size_of_layout size layout) in
+  let rtyp = Type.infer_exn exp in
   let name = if String.is_empty name then sprintf "arg%d" (i+1) else name in
-  let var = Var.create (Sub.name sub ^ "_" ^ name) typ in
-  let arg = Arg.create ~intent var exp in
+  let var = Var.create (Sub.name sub ^ "_" ^ name) ltyp in
+  let arg = Arg.create ~intent var @@ coerce ltyp rtyp exp in
   let arg = Term.set_attr arg Attrs.data data in
   let arg = Term.set_attr arg Attrs.t t in
+  let arg = Term.set_attr arg Attrs.layout layout in
   arg
 
-let registry = Hashtbl.create (module String)
-let register name abi = Hashtbl.set registry ~key:name ~data:abi
-let get_processor name = Hashtbl.find registry name
+
+
+let models = Hashtbl.create (module Theory.Target)
+
+let register_model target model =
+  if Hashtbl.mem models target
+  then invalid_argf "A data model for target %s is already set"
+      (Theory.Target.to_string target) ();
+  Hashtbl.add_exn models target (model :> Bap_c_size.base)
+
+let model target = match Hashtbl.find models target with
+  | Some m -> m
+  | None -> if Theory.Target.bits target = 32
+    then new Bap_c_size.base `LP32
+    else new Bap_c_size.base `LP64
+
+let registry = Hashtbl.create (module Theory.Target)
+
+let register name abi =
+  let target = match Theory.Target.lookup ~package:"bap" name with
+    | Some t -> t
+    | None -> invalid_argf
+                "The name of the abi should be a valid name. Got %s. \
+                 See `bap list targets` for the list valid names" name () in
+  Hashtbl.add registry ~key:target ~data:abi |> function
+  | `Ok -> ()
+  | `Duplicate ->
+    invalid_argf "The processor for ABI %s is already registered. \
+                  Please pick a unique name" name ()
+let register_abi = register
+
+let get_processor name =
+  match Theory.Target.lookup ~package:"bap" name with
+  | None -> None
+  | Some t -> Hashtbl.find registry t
+
+let lookup = Hashtbl.find registry
+
 
 let get_prototype gamma name = match gamma name with
   | Some (`Function proto) -> proto
@@ -131,46 +246,54 @@ let get_prototype gamma name = match gamma name with
         }
     }
 
-let create_api_processor size abi : Bap_api.t =
-  let addr_size = size#pointer in
 
+let apply_args abi size attrs t sub =
+  let t = decay_arrays t in
+  match abi.insert_args sub attrs t with
+  | None -> sub
+  | Some {return; hidden; params} ->
+    let params = List.mapi params ~f:(fun i a -> i,a) in
+    List.map2 params t.Bap_c_type.Proto.args ~f:(fun (i,a) (n,t) ->
+        create_arg size i (arg_intent t) n t a sub) |>
+    function
+    | Unequal_lengths ->
+      error "The ABI processor generated an incorrect number of \
+             argument terms for the subroutine %s: %d <> %d"
+        (Sub.name sub)
+        (List.length params)
+        (List.length t.args);
+      sub
+    | Ok args ->
+      let ret = match return with
+        | None -> []
+        | Some ret ->
+          let t = t.Bap_c_type.Proto.return in
+          [create_arg size 0 Out "result" t ret sub] in
+      let hid = List.mapi hidden ~f:(fun i (t,a) ->
+          let n = "hidden" ^ if i = 0 then "" else Int.to_string i in
+          create_arg size 0 Both n t a sub) in
+      List.fold (args@hid@ret) ~init:sub ~f:(Term.append arg_t)
+
+let apply abi size attrs t sub =
+  let sub = apply_args abi size attrs t sub in
+  let sub = Term.set_attr sub Attrs.proto t in
+  let sub = List.fold_right ~init:sub attrs ~f:Bap_c_attr.apply in
+  abi.apply_attrs attrs sub
+
+let create_api_processor size abi : Bap_api.t =
   let stage1 gamma = object(self)
-    inherit Term.mapper as super
+    inherit Term.mapper
     method! map_sub sub =
       if Term.has_attr sub Attrs.proto then sub
       else self#apply_proto sub
 
     method private apply_proto sub =
-      let name = Sub.name sub in
-      let {Bap_c_type.Spec.t; attrs} = get_prototype gamma name in
-      let sub = self#apply_args sub attrs t in
-      let sub = Term.set_attr sub Attrs.proto t in
-      let sub = List.fold_right ~init:sub attrs ~f:Bap_c_attr.apply in
-      abi.apply_attrs attrs sub
-
-
-    method private apply_args sub attrs t =
-      let t = decay_arrays t in
-      match abi.insert_args sub attrs t with
-      | None ->
-        super#map_sub sub
-      | Some {return; hidden; params} ->
-        let params = List.mapi params ~f:(fun i a -> i,a) in
-        List.map2 params t.Bap_c_type.Proto.args ~f:(fun (i,a) (n,t) ->
-            create_arg i addr_size (arg_intent t) n t a sub) |>
-        function
-        | Unequal_lengths -> super#map_sub sub
-        | Ok args ->
-          let ret = match return with
-            | None -> []
-            | Some ret ->
-              let t = t.Bap_c_type.Proto.return in
-              [create_arg 0 addr_size Out "result" t ret sub] in
-          let hid = List.mapi hidden ~f:(fun i (t,a) ->
-              let n = "hidden" ^ if i = 0 then "" else Int.to_string i in
-              create_arg 0 addr_size Both n t a sub) in
-          List.fold (args@hid@ret) ~init:sub ~f:(Term.append arg_t)
-
+      if Term.has_attr sub Sub.intrinsic
+      then sub
+      else
+        let name = Sub.name sub in
+        let {Bap_c_type.Spec.t; attrs} = get_prototype gamma name in
+        apply abi size attrs t sub
   end in
   let module Api = struct
     let language = "c"
@@ -190,7 +313,7 @@ let create_api_processor size abi : Bap_api.t =
 
     let parse get ifs = Or_error.try_with (fun () -> parse_exn get ifs)
 
-    let mapper = ident
+    let mapper = Fn.id
   end in
   (module Api)
 
@@ -213,7 +336,7 @@ end
 
 
 module Arg = struct
-  open Core_kernel
+  open Core_kernel[@@warning "-D"]
   open Bap_core_theory
   open Bap.Std
   open Monads.Std
@@ -221,12 +344,8 @@ module Arg = struct
   module C = struct
     module Size = Bap_c_size
     module Type = Bap_c_type
-    module Data = Bap_c_data
+    module Data = Data
   end
-
-  let next_multitude_of ~n x = (x + (n-1)) land (lnot (n-1))
-
-
 
   module Stack : sig
     type t
@@ -273,10 +392,10 @@ module Arg = struct
           (Theory.Target.data_addr_size target / 8) in
       let align = function
         | None ->
-          next_multitude_of ~n:min_alignment
+          C.Size.next_multitude_of ~n:min_alignment
         | Some {ctype} ->
           let m = Size.in_bytes (ruler#alignment ctype) in
-          next_multitude_of ~n:(max min_alignment m) in
+          C.Size.next_multitude_of ~n:(max min_alignment m) in
       match Theory.Target.reg target Theory.Role.Register.stack_pointer with
       | None -> None
       | Some sp -> Some {
@@ -317,7 +436,7 @@ module Arg = struct
 
   module File = struct
     type t = {
-      args : Var.t Map.M(Int).t;
+      args : exp Map.M(Int).t;
       bits : int;
     }
 
@@ -330,15 +449,17 @@ module Arg = struct
       | Some (k,x) ->
         Some ({self with args = Map.remove self.args k},x)
 
-    let popn n self = match Map.split self.args n with
-      | _,None,_ -> None
-      | lt,Some (k,x),rt ->
-        Some ({self with args = Map.add_exn rt k x}, Map.data lt)
+    let popn n self = match Map.min_elt self.args with
+      | None -> None
+      | Some (k,_) -> match Map.split self.args (k+n-1) with
+        | _,None,_ -> None
+        | lt,Some (_,x),rt ->
+          Some ({self with args = rt}, Map.data lt @ [x])
 
     let align n self = match Map.min_elt self.args with
       | None -> None
       | Some (k,_) ->
-        let k' = next_multitude_of ~n k in
+        let k' = C.Size.next_multitude_of ~n k in
         if k = k' then Some (self,())
         else match Map.split self.args k' with
           | _,None,_ -> None
@@ -353,14 +474,16 @@ module Arg = struct
         ~init:Int.Map.empty
 
 
-    let create args = {
+    let of_exps args = {
       args = of_list args;
       bits = match args with
         | [] -> -1
-        | r::_ -> match Var.typ r with
+        | r::_ -> match Type.infer_exn r with
           | Imm x -> x
           | _ -> -1
     }
+
+    let create regs = of_exps @@ List.map ~f:Bil.var regs
 
     let of_roles roles t  =
       let regs =
@@ -416,6 +539,7 @@ module Arg = struct
       fst (Map.max_elt_exn s.files)
 
     let create regs = add (File.create (List.map ~f:Var.reify regs))
+    let of_exps xs = add (File.of_exps xs)
     let of_roles roles t = add (File.of_roles roles t)
 
     let iargs = of_roles Theory.Role.Register.[
@@ -448,12 +572,19 @@ module Arg = struct
         Arg.return res
     let pop s n = update s n File.pop
     let popn ~n s a = update s a (File.popn n)
+    let align ~n s a = update s a (File.align n)
     let deplet s n = update s n @@ fun s -> Some (File.deplet s,())
   end
 
-  let size s t = match s.ruler#bits t with
+  let size t =
+    let* s = Arg.get () in
+    match s.ruler#bits t with
     | None -> Arg.reject ()
     | Some x -> Arg.return x
+
+  let alignment t =
+    let+ s = Arg.get () in
+    Size.in_bits (s.ruler#alignment t)
 
   let require cnd = if cnd then Arg.return () else Arg.reject ()
 
@@ -471,40 +602,51 @@ module Arg = struct
 
   let register file t =
     let* s = Arg.get () in
-    let* bits = size s t in
+    let* bits = size t in
     let regs = Arena.get s file in
     require (File.bits regs >= bits) >>= fun () ->
     let* arg = Arena.pop s file in
-    push_arg t (Bil.var arg)
+    push_arg t arg
 
-  let drop file =
-    Arg.get () >>= fun s -> Arena.pop s file >>| fun _ -> ()
+  let discard ?(n=1) file =
+    Arg.get () >>= fun s -> Arena.popn n s file >>| fun _ -> ()
 
-  let count file t =
+  let registers_for_bits file bits =
     let+ s = Arg.get () in
     let regs = Arena.get s file in
     let abits = File.bits regs in
+    if abits > 0
+    then Some ((bits - 1) / abits + 1)
+    else None
+
+  let count file t =
+    let* s = Arg.get () in
     match s.ruler#bits t with
-    | Some bits when abits > 0 -> Some ((bits - 1) / abits + 1)
-    | _ -> None
+    | None -> Arg.return None
+    | Some bits -> registers_for_bits file bits
 
   let needs_some f = f >>= function
     | None -> Arg.reject ()
     | Some x -> Arg.return x
 
-  let registers ?limit file t =
+  let registers_needed file bits =
+    needs_some @@ registers_for_bits file bits
+
+  let concat ?(rev=false) xs =
+    List.reduce_exn ~f:Bil.concat (if rev then List.rev xs else xs)
+
+  let registers ?rev ?limit file t =
     let* s = Arg.get () in
-    let* regs_needed = needs_some @@ count file t in
+    let* bits = size t in
+    let* regs_needed = registers_needed file bits in
     let limit = Option.value limit ~default:regs_needed in
     require (regs_needed <= limit) >>= fun () ->
     let* args = Arena.popn ~n:regs_needed s file in
-    let exps = List.map args ~f:Bil.var |>
-               List.reduce_exn ~f:Bil.concat in
-    push_arg t exps
+    push_arg t @@ concat ?rev args
 
   let align_even file =
     let* s = Arg.get () in
-    Arena.popn ~n:2 s file >>| ignore
+    Arena.align ~n:2 s file >>| ignore
 
   let deplet file =
     let* s = Arg.get () in
@@ -522,15 +664,10 @@ module Arg = struct
 
   let reference file t =
     with_hidden @@ fun () ->
-    register file (`Pointer C.Type.Spec.{
-        t;
-        attrs = [];
-        qualifier = C.Type.Qualifier.{
-            const = false;
-            volatile = false;
-            restrict = false;
-          }
-      })
+    register file (C.Type.pointer t)
+
+  let pointer file t =
+    register file (C.Type.pointer t)
 
   let update_stack f =
     let* s = Arg.get () in
@@ -541,15 +678,23 @@ module Arg = struct
 
   let push t =
     let* s = Arg.get () in
-    let* bits = size s t in
+    let* bits = size t in
     update_stack @@ Stack.add t (data s.ruler t) bits
 
   let memory t =
     let* s = Arg.get () in
-    let* bits = size s t in
+    let* bits = size t in
     update_stack @@ Stack.add t (data s.ruler t) bits
 
+  let hidden t =
+    with_hidden @@ fun () ->
+    memory (C.Type.pointer t)
+
   let skip_memory bits = update_stack @@ Stack.skip bits
+
+  let rebase slots =
+    let* {target} = Arg.get () in
+    skip_memory (slots * Theory.Target.data_addr_size target)
 
   let load t bits sp base =
     let mem = Var.reify (Theory.Target.data t) in
@@ -569,7 +714,7 @@ module Arg = struct
         let bytes = match endianness with
           | LittleEndian -> bytes
           | BigEndian -> List.rev bytes in
-        Bil.(cast low) bits (List.reduce_exn bytes ~f:Bil.concat) in
+        Bil.(cast low) bits (concat bytes) in
     match Size.of_int_opt bits with
     | Some r -> Bil.(load ~mem:(var mem) ~addr:(addr base) endianness r)
     | None -> load_bytes [] 0 base
@@ -582,27 +727,49 @@ module Arg = struct
     | None -> Arg.reject ()
     | Some stack -> Arg.return stack
 
-  let split_with_memory file typ =
+  let split_with_memory ?rev ?limit file typ =
     let* s = Arg.get () in
-    let* bits = size s typ in
-    let* reg = Arena.pop s file in
-    let* t = target in
-    let* stack = stack in
+    let* bits = size typ in
+    let* needed = registers_needed file bits in
     let regs = Arena.get s file in
-    let base = Stack.base stack in
-    require (Stack.is_empty stack && bits > File.bits regs) >>= fun () ->
-    let mbits = bits - File.bits regs in
-    skip_memory mbits >>= fun () ->
-    push_arg typ @@ Bil.concat (Bil.var reg) (load t mbits base 0)
+    let limit = Option.value limit ~default:(File.available regs) in
+    let available = min limit (File.available regs) in
+    if available >= needed
+    then
+      let* args = Arena.popn ~n:needed s file in
+      push_arg typ @@ concat  ?rev args
+    else
+      let* stk = stack in
+      let* t = target in
+      let base = Stack.base stk in
+      let mbits = bits - available * File.bits regs in
+      require (Stack.is_empty stk && available > 0) >>= fun () ->
+      let* regs = Arena.popn ~n:available s file in
+      skip_memory mbits >>= fun () ->
+      push_arg typ @@ concat ?rev (regs@[load t mbits base 0])
+
+  let popn_bits arena bits =
+    let* s = Arg.get () in
+    let* n = registers_needed arena bits in
+    Arena.popn ~n s arena
+
+  let is_even x = x land 1 = 0
+
+  let split f1 f2 typ =
+    let* bits = size typ in
+    let* regs1 = popn_bits f1 (bits/2) in
+    let* regs2 = popn_bits f2 (bits/2) in
+    require (is_even bits) >>= fun () ->
+    push_arg typ @@ concat (regs1@regs2)
 
   let either op1 op2 = Arg.catch op1 (fun _ -> op2)
-
   let (<|>) = either
 
   let choice options =
     match List.reduce ~f:either options with
     | Some option -> option
     | None -> Arg.reject ()
+
 
   let define ?(return=Arg.return ()) inputs = Arg.sequence [
       switch `Return;
@@ -645,27 +812,135 @@ module Arg = struct
   let accept = Arg.return
   let pure = Arg.return
   let zero = Arg.reject
+
+  let install target ruler pass =
+    let open Bap_core_theory in
+    let abi_name = KB.Name.unqualified (Theory.Target.name target) in
+    let abi_processor = {
+      apply_attrs = (fun _ x -> x);
+      insert_args = fun _ attrs proto ->
+        reify target ruler (pass attrs proto)
+    } in
+    register_abi abi_name abi_processor;
+    register_model target ruler;
+    Bap_abi.register_pass @@ fun proj ->
+    if Theory.Target.equal (Project.target proj) target
+    then begin
+      Bap_api.process (create_api_processor ruler abi_processor);
+      Project.set proj Bap_abi.name abi_name
+    end
+    else proj
+
+  module Language = struct
+    type predicate = ctype -> bool
+    type statement = ctype -> unit Arg.t
+    type predicates = predicate list
+    type statements = statement list
+    type command = predicate * statement
+    type commands = command list
+    type 'a cls = [>] as 'a
+
+    module type V1 = sig
+      val install : Theory.Target.t -> #Bap_c_size.base ->
+        ((?finish:(unit Arg.t) ->
+          return:(alignment:int -> int -> statement) ->
+          (alignment:int -> int -> statement) -> unit Arg.t) ->
+         unit Arg.t) ->
+        unit
+
+      val sequence : commands -> statement
+      val select : commands -> statement
+      val case : (ctype -> 'a cls Arg.t) -> ('a cls * statement) list -> statement
+      val any : predicates -> predicate
+      val all : predicates -> predicate
+      val neither : predicates -> predicate
+
+      val is : bool -> predicate
+      val otherwise : predicate
+      val always : predicate
+      val never : predicate
+      val choose : statements -> statement
+      val combine : statements -> statement
+
+      include Monad.Syntax.S with type 'a t := 'a Arg.t
+      include Monad.Syntax.Let.S with type 'a t := 'a Arg.t
+
+    end
+    module V1 : V1 = struct
+
+      let sequence cmds arg =
+        Arg.List.iter cmds ~f:(fun (cnd,action) ->
+            if cnd arg then action arg else Arg.return ())
+
+      let select options arg =
+        List.find_map options ~f:(fun (cnd,action) ->
+            if cnd arg then Some (action arg) else None) |> function
+        | Some action -> action
+        | None -> Arg.reject ()
+
+
+      let case
+        : (ctype -> 'a cls Arg.t) -> ('a cls * statement) list -> statement
+        = fun classify cmds arg ->
+          let* cls = classify arg in
+          List.find_map cmds ~f:(fun (case,cmd) ->
+              Option.some_if (Poly.equal cls case) cmd) |> function
+          | None -> Arg.reject ()
+          | Some cmd -> cmd arg
+
+      let is cnd = const cnd
+      let otherwise = is true
+      let any ps x = List.exists ps ~f:(fun p -> p x)
+      let all ps x = List.for_all ps ~f:(fun p -> p x)
+      let neither ps x = List.for_all ps ~f:(fun p -> not (p x))
+
+      let choose options arg =
+        choice (List.map options ~f:(fun f -> f arg))
+
+      let otherwise = Fn.const true
+      let always = Fn.const true
+      let never = Fn.const false
+
+      let combine xs arg = Arg.List.iter xs ~f:(fun x -> x arg)
+
+
+      let install
+        : Theory.Target.t -> #Bap_c_size.base ->
+          ((?finish:unit Arg.t ->
+            return:(alignment:int -> int -> statement) ->
+            (alignment:int -> int -> statement) -> unit Arg.t) ->
+           unit Arg.t) ->
+          unit =
+        fun target data k ->
+        install target data @@ fun _ {Bap_c_type.Proto.return=r; args=xs} ->
+        k @@ fun ?(finish=Arg.return ()) ~return args ->
+        let return = match r with
+          | `Void -> Arg.return ()
+          | _ ->
+            let* size = size r in
+            let* alignment = alignment r in
+            return ~alignment size r in
+        let inputs = Arg.List.iter xs ~f:(fun (_,t) ->
+            let* size = size t in
+            let* alignment = alignment t in
+            args ~alignment size t) in
+        Arg.sequence [
+          switch `Return;
+          return;
+          switch `Inputs;
+          inputs;
+          finish;
+        ]
+
+
+      include Arg.Syntax
+      include Arg.Let
+    end
+
+    include V1
+  end
   include Arg
+  let reject = Arg.reject
 end
 
-let define target ruler pass =
-  let open Bap_core_theory in
-  let target_name = Theory.Target.name target in
-  let abi_name =
-    let abi = Theory.Target.abi target in
-    if Theory.Abi.(abi = unknown)
-    then Format.asprintf "%a-unknown" KB.Name.pp target_name
-    else Format.asprintf "%a" KB.Name.pp target_name in
-  let abi_processor = {
-    apply_attrs = (fun _ x -> x);
-    insert_args = fun _ attrs proto ->
-      Arg.reify target ruler (pass attrs proto)
-  } in
-  register abi_name abi_processor;
-  Bap_abi.register_pass @@ fun proj ->
-  if Theory.Target.equal (Project.target proj) target
-  then begin
-    Bap_api.process (create_api_processor ruler abi_processor);
-    Project.set proj Bap_abi.name abi_name
-  end
-  else proj
+let define = Arg.install

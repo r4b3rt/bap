@@ -1,7 +1,9 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_knowledge
 
 module KB = Knowledge
+module Bitv = Bap_core_theory_value.Bitv
+module Bool = Bap_core_theory_value.Bool
 module Var = Bap_core_theory_var
 module Mem = Bap_core_theory_value.Mem
 
@@ -12,7 +14,10 @@ type abi
 type fabi
 type filetype
 type role
+type ('a,'k) origin
 type options = (options_cls,unit) KB.Class.t KB.Value.t and options_cls
+
+type alias
 
 val declare :
   ?parent:t ->
@@ -24,6 +29,7 @@ val declare :
   ?code_alignment:int ->
   ?vars:unit Var.t list ->
   ?regs:(role list * unit Var.t list) list ->
+  ?aliasing:alias list ->
   ?endianness:endianness ->
   ?system:system ->
   ?abi:abi ->
@@ -34,13 +40,44 @@ val declare :
   ?package:string ->
   string -> t
 
+val register :
+  ?systems:system list ->
+  ?abis:abi list ->
+  ?fabis:fabi list ->
+  ?filetypes:filetype list ->
+  ?options:options list ->
+  ?package:string ->
+  t -> unit
+
+val select :
+  ?unique:bool ->
+  ?strict:bool ->
+  ?parent:t ->
+  ?system:system ->
+  ?abi:abi ->
+  ?fabi:fabi ->
+  ?filetype:filetype ->
+  ?options:options -> unit -> t
+
+val filter :
+  ?strict:bool ->
+  ?parent:t ->
+  ?system:system ->
+  ?abi:abi ->
+  ?fabi:fabi ->
+  ?filetype:filetype ->
+  ?options:options -> unit -> t list
+
+
 val get : ?package:string -> string -> t
 val read : ?package:string -> string -> t
 val lookup : ?package:string -> string -> t option
 val unknown : t
 val is_unknown : t -> bool
 val name : t -> KB.Name.t
+val nicknames : t -> String.Caseless.Set.t
 val matches : t -> string -> bool
+val matching : t -> string -> t option
 val order : t -> t -> KB.Order.partial
 val belongs : t -> t -> bool
 val parent : t -> t
@@ -65,6 +102,8 @@ val regs :
   t -> Set.M(Var.Top).t
 val reg : ?exclude:role list -> ?unique:bool -> t -> role -> unit Var.t option
 val has_roles : t -> role list -> _ Var.t -> bool
+val unalias : t -> 'a Var.t -> ('b,unit) origin option
+
 val endianness : t -> endianness
 val system : t -> system
 val abi : t -> abi
@@ -87,6 +126,7 @@ module Role : sig
   module Register : sig
     val general : t
     val special : t
+    val alias : t
     val pseudo : t
     val integer : t
     val floating : t
@@ -98,7 +138,10 @@ module Role : sig
     val privileged : t
     val constant : t
     val zero : t
+    val one : t
     val status : t
+    val control : t
+    val system : t
     val zero_flag : t
     val sign_flag : t
     val carry_flag : t
@@ -115,10 +158,70 @@ module Role : sig
   include KB.Enum.S with type t := t
 end
 
-module System : KB.Enum.S with type t = system
-module Filetype : KB.Enum.S with type t = filetype
-module Abi : KB.Enum.S with type t = abi
-module Fabi : KB.Enum.S with type t = fabi
+
+
+module System : sig
+  include KB.Enum.S with type t = system
+  val linux : system
+  val darwin : system
+  val vxworks : system
+  val freebsd : system
+  val openbsd : system
+  val windows : system
+  val msdos : system
+  val uefi : system
+  val none : system
+end
+module Filetype : sig
+  include KB.Enum.S with type t = filetype
+  val elf : filetype
+  val coff : filetype
+  val macho : filetype
+  val aout : filetype
+end
+module Abi : sig
+  include KB.Enum.S with type t = abi
+  val gnu : abi
+  val eabi : abi
+  val gnueabi : abi
+  val cdecl : abi
+  val stdcall : abi
+  val fastcall : abi
+  val watcom : abi
+  val ms : abi
+end
+
+module Fabi : sig
+  include  KB.Enum.S with type t = fabi
+  val hard : fabi
+  val soft : fabi
+end
+
+module Alias : sig
+  type t = alias
+  type 'a part
+  val def : 'a Bitv.t Var.t -> 'b part list -> alias
+  val reg : 'a Bitv.t Var.t -> 'a part
+  val bit : Bool.t Var.t -> Bool.t part
+  val unk : 'a part
+end
+
+module Origin : sig
+  type ('s,'k) t = ('s,'k) origin
+  type sub
+  type sup
+  type set
+
+  val cast_sub : ('a,unit) t -> ('a,sub) t option
+  val cast_sup : ('a,unit) t -> ('a,sup) t option
+  val cast_set : ('a,unit) t -> (Bool.t,set) t option
+  val reg : ('a,sub) t -> 'a Bitv.t Var.t
+  val is_alias : ('a,sub) t -> bool
+  val hi : ('a,sub) t -> int
+  val lo : ('a,sub) t -> int
+  val regs : ('a,sup) t -> 'a Bitv.t Var.t list
+  val bits : (Bool.t,set) t -> Bool.t Var.t list
+end
 
 module Options : sig
   type cls = options_cls
@@ -134,6 +237,7 @@ include Binable.S with type t := t
 include Stringable.S with type t := t
 include Pretty_printer.S with type t := t
 val name : t -> KB.Name.t
+val hash : t -> int
 val unknown : t
 val domain : t KB.domain
 val persistent : t KB.persistent

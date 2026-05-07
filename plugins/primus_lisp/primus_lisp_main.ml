@@ -1,24 +1,29 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_core_theory
 open Bap.Std
 open Monads.Std
 open Bap_primus.Std
 open Format
+module Sys = Caml.Sys
 include Self()
 
 module Primitives = Primus_lisp_primitives
 module Semantics_primitives = Primus_lisp_semantic_primitives
 module Channels = Primus_lisp_io
 module Configuration = Bap_main.Extension.Configuration
+module Local = Primus_lisp_config
 
 let is_folder p = Sys.file_exists p && Sys.is_directory p
 
 let library_paths =
-  let (/) = Filename.concat in Configuration.[
-      datadir / "primus" / "lisp";
-      sysdatadir / "primus" / "site-lisp";
-      sysdatadir / "primus" / "lisp";
-    ] |> List.filter ~f:is_folder
+  let (/) = Filename.concat in
+  Local.Sites.lisp @
+  Local.Sites.site_lisp @
+  Configuration.[
+    datadir / "primus" / "lisp";
+    sysdatadir / "primus" / "site-lisp";
+    sysdatadir / "primus" / "lisp";
+  ] |> List.filter ~f:is_folder
 
 let dump_program prog =
   let margin = get_margin () in
@@ -28,20 +33,16 @@ let dump_program prog =
 
 let load_program paths features project =
   match Primus.Lisp.Load.program ~paths project features with
-  | Ok prog -> prog
+  | Ok prog ->
+    let context = Primus.Lisp.Context.of_program prog in
+    info "Loaded program in context:@\n@[<2>%a@]"
+      Primus.Lisp.Context.pp context;
+    prog
   | Error err ->
     let err = asprintf "%a" Primus.Lisp.Load.pp_error err in
     invalid_arg err
 
 module Documentation = struct
-  let pp_index ppf index =
-    List.iter index ~f:(fun (cat,elts) ->
-        fprintf ppf "* %a@\n" Primus.Lisp.Doc.Category.pp cat;
-        List.iter elts ~f:(fun (name,desc) ->
-            fprintf ppf "** ~%a~@\n%a@\n"
-              Primus.Lisp.Doc.Name.pp name
-              Primus.Lisp.Doc.Descr.pp desc))
-
   let print proj =
     let module Machine = struct
       type 'a m = 'a
@@ -51,8 +52,8 @@ module Documentation = struct
     let module Doc = Primus.Lisp.Doc.Make(Machine) in
     let module Main = Primus.Machine.Main(Machine) in
     let print =
-      Doc.generate_index >>| fun index ->
-      printf "%a@\n%!" pp_index index in
+      Doc.generate_index >>|
+      Primus_lisp_documentation.print None in
     match Main.run proj print with
     | Normal, _ -> ()
     | Exn e, _ ->
@@ -300,8 +301,8 @@ module Semantics = struct
         comment "translates instruction operands to lisp arguments"
       end);
     KB.promise Lisp.Semantics.args @@ fun this ->
-    KB.collect Insn.slot this >>=? fun insn ->
-    Theory.instance () >>= Theory.require >>= fun theory ->
+    let*? insn = KB.collect Insn.slot this in
+    Theory.current >>= fun theory ->
     Theory.Label.target this >>= fun target ->
     args_of_ops theory target insn >>| Option.some
 
@@ -314,8 +315,8 @@ module Semantics = struct
       end);
     KB.promise Lisp.Semantics.name @@ fun this ->
     KB.collect Insn.slot this >>|? fun insn ->
-    let name = KB.Name.create ~package:(Insn.encoding insn) (Insn.name insn) in
-    Some name
+    KB.Name.create ~package:(Insn.encoding insn) (Insn.name insn) |>
+    Option.some
 
   let strip_lisp_extension = String.chop_suffix ~suffix:".lisp"
 
@@ -323,12 +324,22 @@ module Semantics = struct
     Sys.readdir folder |> Array.to_list |>
     List.filter_map ~f:strip_lisp_extension
 
-  let default_paths = let (/) = Filename.concat in Configuration.[
+  let default_paths = let (/) = Filename.concat in
+    Local.Sites.semantics @
+    Configuration.[
       datadir / "primus" / "semantics";
       sysdatadir / "primus" / "semantics";
     ]
 
+  let check_user_provided paths =
+    match List.find paths ~f:(Fn.non is_folder) with
+    | None -> ()
+    | Some path ->
+      invalid_argf "unable to load semantics from %S, \
+                    the path must exist and be a folder" path ()
+
   let load_lisp_sources paths =
+    check_user_provided paths;
     let paths = List.filter ~f:is_folder (paths @ default_paths) in
     let features = "core"::List.concat_map ~f:collect_features paths in
     let paths = paths @ library_paths in
@@ -376,8 +387,8 @@ let () =
     Config.(param (list dir) ~doc:"paths to lisp libraries" "add") in
 
   let features =
-    Config.(param (list string) ~doc:"load specified module" "load"
-              ~default:["posix"]) in
+    Config.(param_all (list string) ~doc:"load specified module" "load"
+              ~default:[["posix"]]) in
 
   let semantics =
     let doc = sprintf "prepend the specified folders to the list of
@@ -407,39 +418,41 @@ let () =
         (String.concat ~sep:" or " Redirection.known_channels) in
     Config.(param (list Redirection.convert) ~doc "channel-redirect") in
 
-  Config.when_ready (fun {Config.get=(!!)} ->
-      if !!documentation then
-        Project.register_pass' ~deps:["api"] ~autorun:true Documentation.print;
-      if !!enable_typecheck then
-        Project.register_pass' ~deps:["api"] ~autorun:true typecheck;
-      let paths = [Filename.current_dir_name] @ !!libs @ library_paths in
-      let features = "core" :: !!features in
-      Primus.Components.register_generic ~package:"bap" "lisp-type-checker"
-        (module TypeErrorSummary)
-        ~desc:"Typechecks program and outputs the summary in the standard output.";
-      Primus.Machine.add_component (module LispCore) [@warning "-D"];
-      Primus.Components.register_generic "lisp-core" (module LispCore)
-        ~package:"bap"
-        ~desc:"Initializes Primus Lisp core. Forwards Lisp message to \
-               the BAP log subsystem and enables propagation of \
-               observations to signals.";
-      Primus.Machine.add_component (module TypeErrorPrinter) [@warning "-D"];
-      Primus.Components.register_generic ~package:"bap" "lisp-type-error-printer"
-        (module TypeErrorPrinter)
-        ~desc:"Prints Primus Lisp type errors into the standard output.";
-      Channels.init !!redirects;
-      Primitives.init ();
-      Semantics_primitives.provide ();
-      Semantics_primitives.enable_extraction ();
-      Semantics.load_lisp_unit ~paths ~features;
-      let stdout = Option.map !!semantics_stdout ~f:(fun file ->
-          let ch = Out_channel.create file in
-          let ppf = Format.formatter_of_out_channel ch in
-          at_exit (fun () ->
-              Format.pp_print_flush ppf ();
-              Out_channel.close ch);
-          ppf) in
-      Primus.Lisp.Semantics.enable ?stdout ();
-      if Poly.(!!semantics <> ["disable"])
-      then Semantics.enable_lifter !!semantics;
-      load_lisp_program !!dump paths features)
+  Config.declare_extension
+    ~doc:"loads and manages Primus Lisp sources"
+    ~provides:["primus"; "lisp"; "semantics"; "lifter"]
+  @@ fun {Config.get=(!!)} ->
+  if !!documentation then
+    Project.register_pass' ~deps:["api"] ~autorun:true Documentation.print;
+  if !!enable_typecheck then
+    Project.register_pass' ~deps:["api"] ~autorun:true typecheck;
+  let paths = [Filename.current_dir_name] @ !!libs @ library_paths in
+  let features = "core" :: List.concat !!features in
+  Primus.Components.register_generic ~package:"bap" "lisp-type-checker"
+    (module TypeErrorSummary)
+    ~desc:"Typechecks program and outputs the summary in the standard output.";
+  Primus.Machine.add_component (module LispCore) [@warning "-D"];
+  Primus.Components.register_generic "lisp-core" (module LispCore)
+    ~package:"bap"
+    ~desc:"Initializes Primus Lisp core. Forwards Lisp message to \
+           the BAP log subsystem and enables propagation of \
+           observations to signals.";
+  Primus.Machine.add_component (module TypeErrorPrinter) [@warning "-D"];
+  Primus.Components.register_generic ~package:"bap" "lisp-type-error-printer"
+    (module TypeErrorPrinter)
+    ~desc:"Prints Primus Lisp type errors into the standard output.";
+  Channels.init !!redirects;
+  Primitives.init ();
+  Semantics_primitives.provide ();
+  Semantics.load_lisp_unit ~paths ~features;
+  let stdout = Option.map !!semantics_stdout ~f:(fun file ->
+      let ch = Out_channel.create file in
+      let ppf = Format.formatter_of_out_channel ch in
+      at_exit (fun () ->
+          Format.pp_print_flush ppf ();
+          Out_channel.close ch);
+      ppf) in
+  Primus.Lisp.Semantics.enable ?stdout ();
+  if Poly.(!!semantics <> ["disable"])
+  then Semantics.enable_lifter !!semantics;
+  load_lisp_program !!dump paths features

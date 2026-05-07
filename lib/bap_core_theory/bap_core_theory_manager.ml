@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_knowledge
 
 open Bap_core_theory_definition
@@ -9,10 +9,12 @@ let user_package = "user"
 
 module Value = Knowledge.Value
 module Name = Knowledge.Name
+module Desugar = Bap_core_theory_pass.Desugar
 
 type 'a theory = {
   name : Set.M(Name).t;
   desc : string;
+  desugared : Base.bool;
   requires : Set.M(String).t;
   provides : Set.M(String).t;
   structure : 'a;
@@ -28,7 +30,7 @@ let features = Set.of_list (module String)
 let names = Set.of_list (module Name)
 
 module Empty = struct
-  let name = Name.create ~package:"core-theory" "empty"
+  let name = Name.create ~package:"core" "empty"
   let requires = ["empty"]
   let provides = [Name.show name]
   module Self = Bap_core_theory_empty.Core
@@ -36,6 +38,7 @@ module Empty = struct
     is_empty = true;
     name = names [name];
     desc = "The empty theory.";
+    desugared = false;
     requires = Set.of_list (module String) requires;
     provides = Set.of_list (module String) provides;
     structure = (module Self : Core);
@@ -63,13 +66,13 @@ let declare
     ?(context=[])
     ?(provides=[])
     ?package ~name structure =
-
   let name = Name.create ?package name in
   let extends = List.map extends ~f:Name.read in
   check_uniqueness name;
   Hashtbl.add_exn known_theories name {
     is_empty = false;
     name = names (name :: Empty.name :: extends);
+    desugared = false;
     desc; structure;
     requires = features context;
     provides = Set.add (features provides) (Name.show name);
@@ -77,52 +80,43 @@ let declare
   }
 
 let (++) x y =
-  x >>= fun x ->
-  y >>| fun y ->
+  let+ x = x and+ y = y in
   Value.merge x y
 [@@inline]
 
+
 let join1 p q x =
-  x >>= fun x ->
+  let* x = x in
   p !!x ++ q !!x
 [@@inline]
 
 let join1s p q s x =
-  x >>= fun x ->
+  let* x = x in
   p s !!x ++ q s !!x
 [@@inline]
 
 let join2 p q x y =
-  x >>= fun x ->
-  y >>= fun y ->
+  let* x = x and+ y = y in
   p !!x !!y ++ q !!x !!y
 [@@inline]
 
 let join2s p q s x y =
-  x >>= fun x ->
-  y >>= fun y ->
+  let* x = x and+ y = y in
   p s !!x !!y ++ q s !!x !!y
 [@@inline]
 
 let join3 p q x y z =
-  x >>= fun x ->
-  y >>= fun y ->
-  z >>= fun z ->
+  let* x = x and* y = y and* z = z in
   p !!x !!y !!z ++ q !!x !!y !!z
 [@@inline]
 
 let join3s p q s x y z =
-  x >>= fun x ->
-  y >>= fun y ->
-  z >>= fun z ->
+  let* x = x and* y = y and* z = z in
   p s !!x !!y !!z ++ q s !!x !!y !!z
 [@@inline]
 
 let join4 p q r x y z =
-  r >>= fun r ->
-  x >>= fun x ->
-  y >>= fun y ->
-  z >>= fun z ->
+  let* r = r and* x = x and* y = y and* z = z in
   p !!r !!x !!y !!z ++ q !!r !!x !!y !!z
 [@@inline]
 
@@ -279,7 +273,6 @@ let set_inclusion_order x y : Knowledge.Order.partial =
 let order t1 t2 = set_inclusion_order t1.name t2.name
 
 let merge t1 t2 = match order t1 t2 with
-  | EQ -> t1
   | LT -> t2
   | GT -> t1
   | NC -> {
@@ -288,8 +281,13 @@ let merge t1 t2 = match order t1 t2 with
       requires = Set.union t1.requires t2.requires;
       provides = Set.union t1.provides t2.provides;
       structure = join_cores t1.structure t2.structure;
+      desugared = false;
       id = Set.union t1.id t2.id;
     }
+  | EQ -> match t1.desugared, t2.desugared with
+    | true,false -> t1
+    | false,true -> t2
+    | _ -> t1
 
 let join t1 t2 = Ok (merge t1 t2)
 
@@ -308,22 +306,36 @@ let domain = Knowledge.Domain.define "theory"
     ~order
 
 let slot = Knowledge.Class.property theory "instance" domain
-    ~package:"core-theory"
+    ~package:"core"
     ~desc:"The theory structure"
 
-
-let str_ctxt () ctxt =
-  List.to_string (Set.to_list ctxt) ~f:ident
+let current = Knowledge.Context.declare
+    ~package:"core" "*current-theory*"
+    !!(Knowledge.Object.null theory)
 
 module Theory = (val Knowledge.Object.derive theory)
 
+let theories = KB.Context.declare
+    ~package:"core" "*theories*"
+    !!None
+
 let theories () =
-  let init = Map.empty (module Theory) in
-  Hashtbl.to_alist known_theories |>
-  Knowledge.List.fold ~init ~f:(fun theories (name,def) ->
-      Knowledge.Symbol.intern (Name.unqualified name) theory
-        ~package:(Name.package name) >>| fun name ->
-      Map.add_exn theories name def)
+  KB.Context.get theories >>= function
+  | Some theories -> !!theories
+  | None ->
+    let init = Map.empty (module Theory) in
+    Hashtbl.to_alist known_theories |>
+    Knowledge.List.fold ~init ~f:(fun theories (name,def) ->
+        Knowledge.Symbol.intern (Name.unqualified name) theory
+          ~package:(Name.package name) >>| fun name ->
+        Map.add_exn theories name def) >>= fun r ->
+    KB.Context.set theories (Some r) >>| fun () ->
+    r
+
+
+let str_ctxt () ctxt =
+  List.to_string (Set.to_list ctxt) ~f:Fn.id
+
 
 let is_applicable ~provided ~requires =
   Set.for_all requires ~f:(Set.mem provided)
@@ -349,10 +361,10 @@ let refine ?(context=[]) ?requires theories =
       is_required ~required ~provides)
 
 let theory_for_id id =
-  let sym = sprintf "'%s" @@
-    List.to_string (Set.to_list id) ~f:Name.show in
+  let sym = sprintf "'%s"
+      (List.to_string (Set.to_list id) ~f:Name.show) in
   Knowledge.Symbol.intern sym theory
-    ~package:"core-theory-internal"
+    ~package:"core-internal"
 
 let is_instantiated id =
   Knowledge.collect slot id >>| fun t ->
@@ -388,30 +400,49 @@ let instantiate t =
     id
 
 let instance ?context ?requires () =
-  theories () >>| Map.data >>| refine ?context ?requires >>= function
-  | [] -> theory_for_id Empty.theory.id
-  | [t] ->
-    instantiate t
-  | theories ->
-    List.fold theories ~init:(Set.empty (module Name)) ~f:(fun names t ->
-        Set.union names t.id) |>
-    theory_for_id >>= fun id ->
-    is_instantiated id >>= function
-    | true -> Knowledge.return id
-    | false ->
-      Knowledge.List.map theories
-        ~f:(instantiate >=> Knowledge.collect slot) >>|
-      List.reduce_balanced_exn ~f:merge >>=
-      Knowledge.provide slot id >>| fun () ->
-      id
+  KB.Context.get current >>= fun theory ->
+  match context, requires with
+  | None,None when not (Knowledge.Object.is_null theory) -> !!theory
+  | _ ->
+    theories () >>| Map.data >>| refine ?context ?requires >>= function
+    | [] -> theory_for_id Empty.theory.id
+    | [t] ->
+      instantiate t
+    | theories ->
+      List.fold theories ~init:(names []) ~f:(fun names t ->
+          Set.union names t.id) |>
+      theory_for_id >>= fun id ->
+      is_instantiated id >>= function
+      | true -> Knowledge.return id
+      | false ->
+        Knowledge.List.map theories
+          ~f:(instantiate >=> Knowledge.collect slot) >>|
+        List.reduce_balanced_exn ~f:merge >>=
+        Knowledge.provide slot id >>| fun () ->
+        id
 
 let require name =
   let open Knowledge.Syntax in
   theories () >>= fun theories ->
   match Map.find theories name with
   | Some t -> t.structure
-  | None -> Knowledge.collect slot name >>| fun t ->
-    t.structure
+  | None ->
+    Knowledge.collect slot name >>= fun t ->
+    if t.desugared then !!(t.structure)
+    else
+      let module CT = (val t.structure) in
+      let t = {
+        t with desugared = true;
+               structure = (module Desugar(CT) : Core);
+      } in
+      KB.provide slot name t >>| fun () ->
+      t.structure
+
+
+let with_current t f =
+  Knowledge.Context.with_var current t f
+
+let current = (instance >=> require) ()
 
 
 module Documentation = struct

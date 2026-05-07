@@ -33,8 +33,7 @@ target support packages (plugins that implement support for the given
 architecture) do their best to guess the target and encoding that
 matches the provided name. Use the common names for the architecture
 and it should work. You can use the $(b,bits) and $(b,order) options
-to give more hints to the target support packages. They default to
-$(b,32) and $(b,little) correspondingly.
+to give more hints to the target support packages.
 
 The $(b,target) and $(b,encoding) provides precise control over the
 selection of the target and the encoding that is used to represent
@@ -75,11 +74,10 @@ raw code (i.e., no meta information), then use the $(b,raw) loader.
 ```
 |}
 
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Format
 open Regular.Std
 open Bap.Std
-open Bap_plugins.Std
 open Bap_core_theory
 open Bap_main
 
@@ -90,7 +88,6 @@ type error =
   | Bad_insn of mem * int * int
   | Create_mem of Error.t
   | No_input
-  | Unknown_arch
   | Invalid_base of string
   | Trailing_data of int
   | Inconsistency of KB.conflict
@@ -119,6 +116,7 @@ type output = [
   | `invalid
   | `addr
   | `memory
+  | `knowledge
 ] [@@deriving compare, enumerate]
 
 type target =
@@ -196,22 +194,24 @@ module Spec = struct
       | `size -> "size"
       | `addr -> "addr"
       | `memory -> "memory"
+      | `knowledge -> "knowledge"
       | `invalid -> "invalid" in
 
     let as_flag = function
       | `insn | `bil | `bir -> ["pretty"]
       | `sema -> ["all-slots"]
-      | `kinds | `size | `invalid | `memory | `addr -> [enabled] in
+      | `kinds | `size | `invalid | `memory | `addr | `knowledge -> [enabled] in
 
     let doc = function
       | `insn -> "Print the decoded instruction."
       | `bil -> "Print the BIL code."
       | `bir -> "Print the IR."
-      | `sema -> "Print the knowledge base."
+      | `sema -> "Print the full semantics of the instruction."
       | `kinds -> "Print semantics tags associated with instruction."
       | `size -> "Print the instruction size."
       | `addr -> "Print the instruction address"
       | `memory -> "Print the instruction memory representation"
+      | `knowledge -> "Print the knowledge base."
       | `invalid -> "Print invalid instructions." in
 
     let name s = "show-" ^ name_of_output s in
@@ -255,7 +255,7 @@ let prepend_slash_x x = "\\x" ^ x
 (** [to_binary ?escape s] make a binary string from ascii
     representation, (e.g., "\x01\x02..."). Apply optional
     escape function for each byte *)
-let to_binary ?(map=ident) s =
+let to_binary ?(map=Fn.id) s =
   let seps = [' '; ','; ';'] in
   let separated = List.exists seps ~f:(String.mem s) in
   let bytes = if separated
@@ -339,6 +339,10 @@ let print_insn_memory formats mem =
   List.iter formats ~f:(fun _enabled ->
       printf "%a@\n" Memory.pp mem)
 
+let print_knowledge formats =
+  List.iter formats ~f:(fun _ ->
+      printf "%a@." KB.pp_state (Toplevel.current ()))
+
 let print_insn insn_formats insn =
   List.iter insn_formats ~f:(fun fmt ->
       Insn.with_printer fmt (fun () ->
@@ -347,13 +351,13 @@ let print_insn insn_formats insn =
 let print_bil formats insn =
   let bil = Insn.bil insn in
   List.iter formats ~f:(fun fmt ->
-      printf "%s@." (Bytes.to_string @@ Bil.to_bytes ~fmt bil))
+      printf "%a@." Bytes.pp (Bil.to_bytes ~fmt bil))
 
 let print_bir formats insn  =
   let bs = Blk.from_insn insn in
   List.iter formats ~f:(fun fmt ->
-      printf "%s" @@ String.concat ~sep:"\n"
-        (List.map bs ~f:(fun b -> Bytes.to_string @@ Blk.to_bytes ~fmt b)))
+      List.iter bs ~f:(fun b ->
+          printf "%a@." Bytes.pp (Blk.to_bytes ~fmt b)))
 
 let print_sema formats sema = match formats with
   | [] -> ()
@@ -383,7 +387,8 @@ let print arch mem code formats =
   print_bil (formats `bil) insn;
   print_bir (formats `bir) insn;
   print_sema (formats `sema) insn;
-  print_kinds (formats `kinds) code
+  print_kinds (formats `kinds) code;
+  print_knowledge (formats `knowledge)
 
 let bits = function
   | Target {name=t} -> Theory.Target.bits t
@@ -428,13 +433,14 @@ let validate_formats formats =
   List.map formats ~f:(function
       | (`insn|`bil|`bir) as kind,fmts ->
         validate_module kind fmts
-      | (`kinds|`size|`invalid|`addr|`memory),[] -> Ok ()
-      | (`kinds|`size|`invalid|`addr|`memory),[opt]
+      | (`kinds|`size|`invalid|`addr|`memory|`knowledge),[] -> Ok ()
+      | (`kinds|`size|`invalid|`addr|`memory|`knowledge),[opt]
         when String.equal enabled opt -> Ok ()
       | `kinds,_ -> Error (No_formats_expected "kinds")
       | `size,_ -> Error (No_formats_expected "size")
       | `addr,_ -> Error (No_formats_expected "addr")
       | `memory,_ -> Error (No_formats_expected "memory")
+      | `knowledge,_ -> Error (No_formats_expected "knowledge")
       | `invalid,_ -> Error (No_formats_expected "invalid")
       | `sema,_ ->
         (* no validation right now, since the knowledge introspection
@@ -443,7 +449,6 @@ let validate_formats formats =
 
 
 let print_invalid _pos =
-
   Format.printf "<invalid>@\n"
 
 let run ?(only_one=false) ?(stop_on_error=false) dis arch mem formats =
@@ -494,8 +499,6 @@ let bits_must_not_be_set x =
 let order_must_not_be_set x =
   check Option.is_none x Order_must_not_be_set
 
-
-
 let compute_target provide =
   let extract_target =
     let open KB.Syntax in
@@ -511,18 +514,21 @@ let compute_target provide =
   Toplevel.get result
 
 let target_of_arch arch bits order =
-  let bits = match bits with
-    | None -> 32L
-    | Some bits -> Int64.of_int bits in
-  let is_little = match order with
-    | Some BigEndian -> false
-    | _ -> true in
+  let provide_bits = match bits with
+    | None -> Ogre.return ()
+    | Some bits ->
+      Ogre.provide Image.Scheme.bits (Int64.of_int bits) in
+  let provide_order = match order with
+    | Some endian ->
+      Ogre.provide Image.Scheme.is_little_endian
+        Poly.(endian = LittleEndian)
+    | None -> Ogre.return () in
   let make_spec =
     let open Ogre.Syntax in
     Ogre.sequence [
       Ogre.provide Image.Scheme.arch arch;
-      Ogre.provide Image.Scheme.bits bits;
-      Ogre.provide Image.Scheme.is_little_endian is_little;
+      provide_bits;
+      provide_order;
     ] in
   let spec = match Ogre.exec make_spec Ogre.Doc.empty with
     | Error err ->
@@ -642,9 +648,6 @@ let string_of_failure = function
       KB.Conflict.pp conflict
   | Bad_user_input -> "Could not parse: malformed input"
   | No_input -> "No input was received"
-  | Unknown_arch ->
-    sprintf "Unknown architecture. Supported architectures:\n%s" @@
-    String.concat ~sep:"\n" @@ List.map Arch.all ~f:Arch.to_string
   | Trailing_data 1 -> "the last byte wasn't disassembled"
   | Trailing_data left ->
     sprintf "%d bytes were left non disassembled" left
@@ -689,3 +692,7 @@ let string_of_failure = function
 let () = Extension.Error.register_printer @@ function
   | Fail err -> Some (string_of_failure err)
   | _ -> None
+
+let () = Extension.declare
+    ~doc:"provides mc and objdump commands"
+    (fun _ -> Ok ())

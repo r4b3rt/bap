@@ -1,4 +1,4 @@
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap.Std
 open Powerpc.Std
 
@@ -37,24 +37,29 @@ module PowerPC32 = Make(T32)
 module PowerPC64 = Make(T64)
 module PowerPC64_le = Make(T64_le)
 
+let backend = Config.param Config.(some string) "backend"
+
 let () =
-  Config.when_ready (fun _ ->
-      info "Providing PowerPC semantics in BIL";
-      Bap_powerpc_target.load ();
-      Powerpc_add.init ();
-      Powerpc_branch.init ();
-      Powerpc_compare.init ();
-      Powerpc_cr.init ();
-      Powerpc_div.init ();
-      Powerpc_load.init ();
-      Powerpc_logical.init ();
-      Powerpc_move.init ();
-      Powerpc_mul.init ();
-      Powerpc_rotate.init ();
-      Powerpc_shift.init ();
-      Powerpc_store.init ();
-      Powerpc_sub.init ();
-      register_target `ppc (module PowerPC32);
-      register_target `ppc64 (module PowerPC64);
-      register_target `ppc64le (module PowerPC64_le);
-      Powerpc_abi.setup ());
+  Config.declare_extension
+    ~doc:"provides the PowerPC lifter"
+    ~provides:["semantics"; "lifter"; "powerpc"]
+    (fun {get} ->
+       info "Providing PowerPC semantics in BIL";
+       Bap_powerpc_target.load ?backend:(get backend)();
+       Powerpc_add.init ();
+       Powerpc_branch.init ();
+       Powerpc_compare.init ();
+       Powerpc_cr.init ();
+       Powerpc_div.init ();
+       Powerpc_load.init ();
+       Powerpc_logical.init ();
+       Powerpc_move.init ();
+       Powerpc_mul.init ();
+       Powerpc_rotate.init ();
+       Powerpc_shift.init ();
+       Powerpc_store.init ();
+       Powerpc_sub.init ();
+       register_target `ppc (module PowerPC32);
+       register_target `ppc64 (module PowerPC64);
+       register_target `ppc64le (module PowerPC64_le);
+       Powerpc_abi.setup ());

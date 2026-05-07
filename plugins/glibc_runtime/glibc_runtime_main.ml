@@ -3,10 +3,13 @@ Enables ad-hoc support for glibc runtime code. In particular it
 detects the locations of $(b,main) and $(b,__libc_start_main)
 functions (and adds the latter if it is absent).
 "
-open Core_kernel
+open Core_kernel[@@warning "-D"]
 open Bap_main
 open Bap.Std
 open Bap_c.Std
+open Bap_core_theory
+
+open KB.Syntax
 
 include Bap_main.Loggers()
 
@@ -33,8 +36,8 @@ let find_by_name prog name =
   Term.enum sub_t prog |> Seq.find ~f:(fun sub -> String.equal (Sub.name sub) name)
 
 let find_first_caller prog tid =
-  Term.enum sub_t prog |> Seq.find ~f:(fun sub ->
-      Term.enum blk_t sub |> Seq.exists ~f:(fun blk ->
+  Term.enum sub_t prog |> Seq.find_map ~f:(fun sub ->
+      Term.enum blk_t sub |> Seq.find ~f:(fun blk ->
           Term.enum jmp_t blk |> Seq.exists ~f:(fun jmp ->
               match Jmp.kind jmp with
               | Call c -> Label.equal (Call.target c) (Direct tid)
@@ -80,14 +83,12 @@ let find_libc_start_main prog =
 let detect_main_address prog =
   let open Option.Monad_infix in
   find_by_name prog "__libc_start_main" >>= fun start ->
-  find_first_caller prog (Term.tid start) >>= fun caller ->
-  Term.first blk_t caller >>= fun entry ->
+  find_first_caller prog (Term.tid start) >>= fun entry ->
   Term.first arg_t start >>= fun arg ->
   let defs = Term.enum def_t ~rev:true entry in
   match Arg.rhs arg with
-  | Bil.Var reg ->
-    Seq.find defs ~f:(fun def ->
-        Var.same (Def.lhs def) reg) >>| Def.rhs >>= proj_int
+  | Bil.Var reg -> Seq.find defs ~f:(fun def ->
+      Var.same (Def.lhs def) reg) >>| Def.rhs >>= proj_int
   | Bil.Load (_,addr,_,_) ->
     Seq.find_map defs ~f:(fun def -> match Def.rhs def with
         | Bil.Store (_,a,e,_,_) when Exp.equal addr a -> Some e
@@ -95,20 +96,26 @@ let detect_main_address prog =
   | _ -> None
 
 
-let reinsert_args_for_new_name sub name =
-  let sub = Term.filter arg_t sub ~f:(fun _ -> false) in
-  let sub = Term.del_attr sub C.proto in
-  Sub.with_name sub name
+let reinsert_args_for_new_name ?(abi=Fn.id) sub name =
+  List.fold ~init:sub ~f:(|>) [
+    Term.filter arg_t ~f:(fun _ -> false);
+    (fun sub -> Term.del_attr sub C.proto);
+    (fun sub -> Sub.with_name sub name);
+    abi
+  ]
 
-let rename_main prog = match detect_main_address prog with
-  | None -> prog
-  | Some addr ->
-    Term.map sub_t prog ~f:(fun sub ->
-        match Term.get_attr sub address with
-        | Some a when Addr.equal addr a ->
-          reinsert_args_for_new_name sub "main"
-        | _ -> sub)
-
+let rename_main abi prog =
+  if is_sub_absent prog "main"
+  then match detect_main_address prog with
+    | None -> prog
+    | Some addr ->
+      info "the main subroutine address is %a" Addr.pp addr;
+      Term.map sub_t prog ~f:(fun sub ->
+          match Term.get_attr sub address with
+          | Some a when Addr.equal addr a ->
+            reinsert_args_for_new_name ~abi sub "main"
+          | _ -> sub)
+  else prog
 
 let rename_libc_start_main prog =
   if is_sub_absent prog "__libc_start_main"
@@ -122,17 +129,68 @@ let rename_libc_start_main prog =
         reinsert_args_for_new_name sub "__libc_start_main"
   else prog
 
-let fix_glibc_runtime prog =
-  rename_libc_start_main prog |>
-  rename_main
+module Main = struct
+  let proto : C.Type.proto =
+    match C.Type.function_
+            ~return:(C.Type.basic `sint) [
+            "argc", C.Type.basic `sint;
+            "argv", C.Type.(pointer (pointer (basic `char)))
+          ]
+    with `Function {t=proto} -> proto
+       | _ -> assert false
 
-let main ctxt proj =
-  if Extension.Configuration.get ctxt enable ||
-     is_glibc proj
-  then
-    Project.map_program proj ~f:fix_glibc_runtime
+  let abi proj main =
+    let t = Project.target proj in
+    match C.Abi.lookup t with
+    | None -> main
+    | Some proc ->
+      C.Abi.apply proc (C.Abi.model t) [] proto main
+end
+
+let fix_main proj =
+  Project.map_program proj ~f:(rename_main (Main.abi proj))
+
+let is_enabled ctxt proj =
+  Extension.Configuration.get ctxt enable || is_glibc proj
+
+let recover_main ctxt proj =
+  if is_enabled ctxt proj
+  then fix_main proj
   else proj
 
-let () = Extension.declare ~doc ~provides:["abi"] @@ fun ctxt ->
-  Bap_abi.register_pass (main ctxt);
+let discover_libc_start_main ctxt proj =
+  if is_enabled ctxt proj
+  then Project.map_program proj ~f:rename_libc_start_main
+  else proj
+
+let drop_glibc_internal s = String.drop_prefix s 5
+let is_glibc_internal s = String.is_prefix s ~prefix:"__GI_"
+
+let refine_glibc_internal_aliases () =
+  KB.Rule.(begin
+      declare ~package:"bap" "glibc-internal-aliases" |>
+      require Theory.Label.name |>
+      require Theory.Label.aliases |>
+      provide Theory.Label.aliases |>
+      comment "computes aliases for names starting with the __GI_ \
+               (Glibc Internal) prefix";
+    end);
+  KB.promise Theory.Label.aliases @@ fun label ->
+  KB.collect Theory.Label.name label >>= fun name ->
+  KB.collect Theory.Label.aliases label >>| fun aliases ->
+  let init = match name with
+    | Some name when is_glibc_internal name ->
+      String.Set.singleton @@ drop_glibc_internal name
+    | None | Some _ -> String.Set.empty in
+  Set.fold aliases ~init ~f:(fun acc s ->
+      if is_glibc_internal s then
+        Set.add acc @@ drop_glibc_internal s
+      else acc) |>
+  Set.filter ~f:(Fn.non String.is_empty) |>
+  Set.union aliases
+
+let () = Extension.declare ~doc ~provides:["abi"; "api"] @@ fun ctxt ->
+  refine_glibc_internal_aliases ();
+  Bap_abi.register_pass (discover_libc_start_main ctxt);
+  Project.register_pass ~autorun:true ~deps:["api"] (recover_main ctxt);
   Ok ()
